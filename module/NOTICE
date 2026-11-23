@@ -1,0 +1,12 @@
+bybus module notices
+====================
+
+Runtime components and their licences are listed in THIRD_PARTY-NOTICES.md at
+the repository root. Summary:
+
+- kernelsu@3.3.0 (Apache-2.0): bundled into webroot/app.js; see webroot/NOTICE.txt
+- 7-Zip LZMA SDK (public domain): compiled into bin/bybusd
+- Zygisk API header (ISC-style): compiled into zygisk/arm64-v8a.so
+- Cydia Substrate / And64InlineHook (BSD / MIT): compiled into zygisk/arm64-v8a.so
+- Sarasa Gothic SC Bold (SIL OFL 1.1): assets/ChineseFont.ttf, licence in
+  assets/Sarasa-Gothic-OFL-1.1.txt

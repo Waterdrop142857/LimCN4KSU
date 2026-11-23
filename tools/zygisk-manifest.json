@@ -1,0 +1,6 @@
+{
+  "repo": "topjohnwu/zygisk-module-sample",
+  "mode": "files",
+  "target": "third_party/zygisk",
+  "files": ["module/jni/zygisk.hpp", "module/CMakeLists.txt"]
+}

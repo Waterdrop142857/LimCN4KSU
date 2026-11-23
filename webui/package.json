@@ -1,0 +1,17 @@
+{
+  "name": "bybus-webui",
+  "private": true,
+  "version": "1.0.0",
+  "description": "bybus KernelSU module WebUI sources; builds into module/webroot.",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "kernelsu": "3.3.0"
+  },
+  "devDependencies": {
+    "vite": "^7.1.5"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "repo": "ip7z/7zip",
+  "mode": "single-dir",
+  "dir": "C",
+  "target": "third_party/lzma-sdk",
+  "files": [
+    "7z.h", "7zAlloc.c", "7zAlloc.h", "7zArcIn.c", "7zBuf.c", "7zBuf.h", "7zBuf2.c",
+    "7zCrc.c", "7zCrc.h", "7zCrcOpt.c", "7zDec.c", "7zFile.c", "7zFile.h", "7zStream.c",
+    "7zTypes.h", "7zVersion.h", "7zWindows.h", "Alloc.c", "Alloc.h",
+    "Bcj2.c", "Bcj2.h", "Bra.c", "Bra.h", "Bra86.c", "BraIA64.c",
+    "Compiler.h", "CpuArch.c", "CpuArch.h", "Delta.c", "Delta.h",
+    "Lzma2Dec.c", "Lzma2Dec.h", "LzmaDec.c", "LzmaDec.h",
+    "Ppmd7.c", "Ppmd7.h", "Ppmd7Dec.c", "Precomp.h",
+    "RotateDefs.h", "Threads.c", "Threads.h"
+  ]
+}

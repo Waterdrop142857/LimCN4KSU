@@ -1,0 +1,6 @@
+id=bybus
+name=BYBUS 本地化文本（KernelSU 原生）
+version=1.0.0
+versionCode=1
+author=BYBUS port
+description=官方 LimbusCompany 本地化文本读后合并。需要 ZygiskNext 提供 Zygisk 实现；管理入口为 KernelSU 模块 WebUI。不修改游戏资源、下载清单与账号数据。

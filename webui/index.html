@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#12100f">
+<title>bybus 汉化控制台</title>
+
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="3" y="4.5" width="18" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"></rect>
+        <path d="M3 10.5h18M7.5 17.5v2.5M16.5 17.5v2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+        <circle cx="7.5" cy="13.8" r="1.1" fill="currentColor"></circle>
+        <circle cx="16.5" cy="13.8" r="1.1" fill="currentColor"></circle>
+      </svg>
+      <div class="brand-text">
+        <h1>bybus</h1>
+        <p class="brand-sub" id="brand-sub">Limbus 汉化快照控制台</p>
+      </div>
+    </div>
+  </header>
+
+  <p id="announcer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+
+  <p id="ov-status-code" class="code code-global" hidden></p>
+
+  <nav class="tabs" role="tablist" aria-label="页面分区">
+    <button class="tab is-active" type="button" role="tab" id="tab-overview" data-tab="overview" aria-controls="panel-overview" aria-selected="true" tabindex="0">概览</button>
+    <button class="tab" type="button" role="tab" id="tab-sources" data-tab="sources" aria-controls="panel-sources" aria-selected="false" tabindex="-1">来源</button>
+    <button class="tab" type="button" role="tab" id="tab-update" data-tab="update" aria-controls="panel-update" aria-selected="false" tabindex="-1">更新</button>
+    <button class="tab" type="button" role="tab" id="tab-diagnostics" data-tab="diagnostics" aria-controls="panel-diagnostics" aria-selected="false" tabindex="-1">诊断</button>
+  </nav>
+
+  <main class="panels">
+
+    <!-- ============ 概览 ============ -->
+    <section class="panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="-1">
+      <div class="card">
+        <h2>模块与运行时</h2>
+        <dl class="kv">
+          <dt>模块版本</dt><dd id="ov-module-version">—</dd>
+          <dt>模块状态</dt><dd id="ov-module-state">—</dd>
+          <dt>Zygisk 依赖</dt><dd id="ov-zygisk">—</dd>
+          <dt>存储占用</dt><dd id="ov-storage">—</dd>
+        </dl>
+      </div>
+
+      <div class="card">
+        <h2>游戏</h2>
+        <dl class="kv">
+          <dt>安装状态</dt><dd id="ov-game-state">—</dd>
+          <dt>包名</dt><dd id="ov-game-package">—</dd>
+          <dt>游戏版本</dt><dd id="ov-game-version">—</dd>
+          <dt>原文状态</dt><dd id="ov-game-text">—</dd>
+          <dt>语言</dt><dd id="ov-game-locales">—</dd>
+          <dt>原文表数</dt><dd id="ov-game-tables">—</dd>
+          <dt>保护 profile</dt><dd id="ov-game-profile">—</dd>
+        </dl>
+        <p class="code" id="ov-game-code" hidden></p>
+      </div>
+
+      <div class="card">
+        <h2>快照</h2>
+        <dl class="kv">
+          <dt>状态</dt><dd id="ov-snapshot-state">—</dd>
+          <dt>代 ID</dt><dd id="ov-snapshot-generation">—</dd>
+          <dt>绑定源</dt><dd id="ov-snapshot-source">—</dd>
+          <dt>构建时间</dt><dd id="ov-snapshot-built">—</dd>
+          <dt>合并表数</dt><dd id="ov-snapshot-tables">—</dd>
+          <dt>运行时协议</dt><dd id="ov-snapshot-schema">—</dd>
+        </dl>
+        <p class="code" id="ov-snapshot-code" hidden></p>
+      </div>
+
+      <div class="card">
+        <h2>当前汉化源</h2>
+        <dl class="kv">
+          <dt>名称</dt><dd id="ov-source-name">—</dd>
+          <dt>ID</dt><dd id="ov-source-id">—</dd>
+          <dt>类型</dt><dd id="ov-source-kind">—</dd>
+          <dt>表数</dt><dd id="ov-source-tables">—</dd>
+          <dt>修订</dt><dd id="ov-source-revision">—</dd>
+        </dl>
+        <p class="note note-warn" id="ov-source-pending" hidden></p>
+      </div>
+
+      <div class="card">
+        <h2>当前任务</h2>
+        <dl class="kv">
+          <dt>状态</dt><dd id="ov-job-state">—</dd>
+          <dt>任务 ID</dt><dd id="ov-job-id">—</dd>
+          <dt>进度</dt><dd id="ov-job-progress">—</dd>
+        </dl>
+        <p class="code" id="ov-job-code" hidden></p>
+      </div>
+    </section>
+
+    <!-- ============ 来源 ============ -->
+    <section class="panel" id="panel-sources" role="tabpanel" aria-labelledby="tab-sources" tabindex="-1" hidden>
+      <div class="card">
+        <div class="card-head">
+          <h2>已安装汉化源</h2>
+          <button class="btn btn-quiet" type="button" id="sources-refresh">刷新列表</button>
+        </div>
+        <p class="note note-warn" id="sources-pending" hidden></p>
+        <p class="note" id="sources-hint">点按“刷新列表”读取全部来源。</p>
+        <ul class="source-list" id="source-list"></ul>
+        <p class="code" id="sources-code" hidden></p>
+      </div>
+    </section>
+
+    <!-- ============ 更新 ============ -->
+    <section class="panel" id="panel-update" role="tabpanel" aria-labelledby="tab-update" tabindex="-1" hidden>
+      <div class="card">
+        <h2>在线更新</h2>
+        <label class="field" for="github-pat-input">GitHub PAT（可选）</label>
+        <input class="text-input" id="github-pat-input" type="password" spellcheck="false"
+               autocomplete="off" placeholder="github_pat_..." aria-describedby="github-pat-note">
+        <p class="note" id="github-pat-note">仅用于查询公开 GitHub Release，缓解匿名 API 速率限制；无需额外仓库权限。点击“保存 PAT”后会存入此管理器的 WebView 本地存储，下次打开自动填入。KernelSU 的其他模块页面可能读取同源存储；只保存无 scopes 的专用 classic PAT。</p>
+        <p class="note note-warn" id="github-pat-hint" hidden></p>
+        <div class="btn-row">
+          <button class="btn" type="button" id="btn-update-release">检查官方源更新</button>
+          <button class="btn" type="button" id="btn-update-inbox">使用收件箱归档</button>
+          <button class="btn btn-quiet" type="button" id="btn-pat-save">保存 PAT</button>
+          <button class="btn btn-quiet" type="button" id="btn-pat-clear">清除 PAT</button>
+        </div>
+        <p class="note">下载与校验在后台执行，页面关闭后任务继续。</p>
+      </div>
+
+      <div class="card">
+        <h2>任务</h2>
+        <p class="kv-line">当前任务：<span id="job-summary">空闲</span></p>
+        <div class="bar" id="job-bar" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <span class="bar-fill" id="job-bar-fill"></span>
+        </div>
+        <p class="kv-line" id="job-progress">无进度信息</p>
+        <p class="code" id="job-code" hidden></p>
+        <div class="btn-row">
+          <button class="btn" type="button" id="btn-snapshot-build">按当前源生成快照</button>
+          <button class="btn btn-danger" type="button" id="btn-job-cancel" disabled>取消任务</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>本地包导入</h2>
+        <label class="field" for="path-input">汉化包路径</label>
+        <input class="text-input" id="path-input" type="text" inputmode="text" spellcheck="false"
+               autocomplete="off" placeholder="/sdcard/Download/LimbusLocalize_1.0.7z" aria-describedby="import-hint">
+        <p class="note" id="import-hint">后台以 root 直接读取并复制该文件，无需上传；按文件内容识别归档格式。</p>
+        <button class="btn" type="button" id="btn-import-path">从该路径导入</button>
+        <dl class="kv kv-compact">
+          <dt>阶段</dt><dd id="import-phase">空闲</dd>
+        </dl>
+        <p class="code" id="import-code" hidden></p>
+      </div>
+
+      <div class="card" id="url-card">
+        <h2>粘贴 HTTPS 归档地址</h2>
+        <p class="note">也可以直接提供 HTTPS 归档地址，由后台下载后导入。</p>
+        <label class="field" for="url-input">归档地址</label>
+        <input class="text-input" id="url-input" type="url" inputmode="url" spellcheck="false" autocomplete="off" placeholder="https://example.com/LimbusLocalize_123.7z">
+        <p class="note note-warn" id="url-hint" hidden></p>
+        <p class="code" id="url-code" hidden></p>
+        <button class="btn" type="button" id="btn-update-url">从地址开始更新</button>
+      </div>
+    </section>
+
+    <!-- ============ 诊断 ============ -->
+    <section class="panel" id="panel-diagnostics" role="tabpanel" aria-labelledby="tab-diagnostics" tabindex="-1" hidden>
+      <div class="card">
+        <div class="card-head">
+          <h2>运行时</h2>
+          <button class="btn btn-quiet" type="button" id="diag-refresh">刷新</button>
+        </div>
+        <dl class="kv">
+          <dt>运行时代</dt><dd id="diag-runtime-generation">—</dd>
+          <dt>命中 / 未命中</dt><dd id="diag-hits">—</dd>
+          <dt>字体状态</dt><dd id="diag-font">—</dd>
+          <dt>AppSealing</dt><dd id="diag-compat">—</dd>
+          <dt>运行时状态</dt><dd id="diag-runtime-code">—</dd>
+          <dt>上次构建</dt><dd id="diag-build-last">—</dd>
+          <dt>构建计数</dt><dd id="diag-build-counts">—</dd>
+        </dl>
+        <p class="code" id="diag-code" hidden></p>
+      </div>
+
+      <div class="card">
+        <details id="diag-log-details" open>
+          <summary>阶段日志（最多 200 条）</summary>
+          <ol class="log" id="diag-log"></ol>
+        </details>
+      </div>
+    </section>
+
+  </main>
+
+  <noscript>
+    <p class="note note-warn">该控制台需要启用 JavaScript。</p>
+  </noscript>
+</div>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

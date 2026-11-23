@@ -1,0 +1,69 @@
+# Build outputs
+/build/obj/
+/build/out/
+/build/bybus-*.zip
+/build/bybus-*.zip.sha256
+/build/SHA256SUMS
+/build/*.log
+/build/*副本*
+/build/*.tmp
+/build/host/
+
+# Generated module payloads (rebuild with build/package.mjs)
+/module/bin/
+/module/zygisk/
+/module/webroot/
+
+# WebUI dependencies and generated bundles
+/webui/node_modules/
+/webui/dist/
+/webui/.vite/
+
+# Native/object files
+*.o
+*.obj
+*.a
+*.so
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# Local toolchain / IDE / OS
+.vs/
+.vscode/
+.idea/
+*.iml
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+
+# Local secrets and signing material
+.env
+.env.*
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+
+# NDK / external toolchains if copied into the workspace
+/android-ndk-r30/
+/ndk/
+
+# Test and packaging scratch space
+/tests/out/
+/coverage/

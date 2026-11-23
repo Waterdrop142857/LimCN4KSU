@@ -1,0 +1,4 @@
+# pnpm 10+ reads build-script approvals from here; esbuild needs its
+# postinstall to place the platform binary used by Vite.
+onlyBuiltDependencies:
+  - esbuild

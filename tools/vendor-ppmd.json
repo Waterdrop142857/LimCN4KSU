@@ -1,0 +1,7 @@
+{
+  "repo": "ip7z/7zip",
+  "mode": "single-dir",
+  "dir": "C",
+  "target": "third_party/lzma-sdk",
+  "files": ["Ppmd.h"]
+}

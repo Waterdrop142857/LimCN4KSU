@@ -1,0 +1,14 @@
+bybus module WebUI — third-party notices
+=======================================
+
+app.js bundles the official KernelSU WebUI library verbatim:
+
+  kernelsu 3.3.0
+  https://www.npmjs.com/package/kernelsu
+  https://github.com/tiann/KernelSU
+  Copyright (c) KernelSU contributors
+  Licensed under the Apache License, Version 2.0
+  https://www.apache.org/licenses/LICENSE-2.0
+
+The library is bundled by Vite (MIT, build-time only) and is not modified other
+than by minification. No other third-party code ships in this directory.
