@@ -127,7 +127,9 @@ bool validate_header(const LibraryHeader &library, uint64_t page_size, std::stri
         segment.filesz = read_u64(bytes, row + 32);
         segment.memsz = read_u64(bytes, row + 40);
         segment.align = read_u64(bytes, row + 48);
-        if (segment.offset > library.file_size ||
+        if (segment.memsz == 0 || segment.memsz > library.file_size ||
+            segment.vaddr > library.file_size - segment.memsz ||
+            segment.offset > library.file_size ||
             segment.filesz > library.file_size - segment.offset ||
             segment.filesz > segment.memsz || segment.align < page_size ||
             (segment.align & (segment.align - 1)) != 0 ||
@@ -141,6 +143,8 @@ bool validate_header(const LibraryHeader &library, uint64_t page_size, std::stri
         *error = "native_segment_missing";
         return false;
     }
+    // Every load was bounded by file_size above, so these sums cannot wrap and
+    // an impossible memsz cannot be used to declare two segments disjoint.
     for (size_t i = 0; i < loads.size(); ++i) {
         for (size_t j = i + 1; j < loads.size(); ++j) {
             const Segment &a = loads[i];

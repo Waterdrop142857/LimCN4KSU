@@ -454,8 +454,10 @@ shared::Code JobQueue::build_and_publish(JobView *view, const JobSpec &spec,
     publish_view(*view);
     const translation::BuildOutcome built = translation::build_generation(inputs);
     view->done = built.tables;
+    // `insufficient_pairs` 等「成功但降级」的原因要能被 `job status` 读到，
+    // so the detail is kept on both the Ok and the failure path.
+    if (!built.detail.empty()) view->detail = built.detail;
     if (built.code != shared::Code::Ok) {
-        view->detail = built.detail;
         shared::remove_tree(temp);
         if (diagnostics_) diagnostics_->record("pairing", built.code, built.tables);
         return built.code;

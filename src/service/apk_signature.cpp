@@ -175,6 +175,10 @@ ApkSignatureResult read_apk_signer(const std::string &apk_path) {
         result.error = "signature_block_read";
         return result;
     }
+    if (block.size() < 24) {
+        result.error = "signature_block_size";
+        return result;
+    }
     if (le64(block, 0) != block_size) {
         result.error = "signature_block_header";
         return result;

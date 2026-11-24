@@ -15,6 +15,9 @@ constexpr uint16_t kXmlType = 0x0003;
 constexpr uint16_t kStringPoolType = 0x0001;
 constexpr uint16_t kStartElementType = 0x0102;
 constexpr uint32_t kNoIndex = 0xffffffffu;
+// A UTF-8 string length prefix declares at most four continuation bytes; a
+// longer chain is malformed, not merely truncated.
+constexpr size_t kMaxLengthContinuations = 4;
 
 struct StringPool {
     std::vector<std::string> strings;
@@ -46,10 +49,10 @@ bool read_utf8_length(const std::string &bytes, size_t *at, uint32_t *length) {
     uint32_t value = first & 0x7f;
     size_t count = 1;
     while (first & 0x80) {
+        if (count > kMaxLengthContinuations || *at + count >= bytes.size()) return false;
         value = (value << 8) | static_cast<uint8_t>(bytes[*at + count]);
         first = static_cast<uint8_t>(first << 1);
         ++count;
-        if (*at + count > bytes.size()) return false;
     }
     *length = value;
     *at += count;
