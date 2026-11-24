@@ -116,6 +116,7 @@ bool SnapshotReader::open(CompanionClient *client, const HelloInfo &hello, std::
         if (hello.index_fd >= 0) ::close(hello.index_fd);
         return false;
     }
+    translation_index_ = TranslationIndex();
     if (manifest.index.present) {
         if (hello.index_fd < 0) {
             if (hello.font_fd >= 0) ::close(hello.font_fd);

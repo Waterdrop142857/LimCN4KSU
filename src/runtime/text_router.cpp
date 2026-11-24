@@ -7,6 +7,7 @@
 #include "runtime/il2cpp.h"
 #include "runtime/state.h"
 #include "runtime/translation_index.h"
+#include "runtime/ui_labels.h"
 #include "shared/sha256.h"
 
 namespace bybus::runtime {
@@ -55,6 +56,11 @@ bool translate_text_value(const std::string &source, const char *resource_hint,
         }
     }
     const TranslationIndex &index = runtime.reader.translation_index();
+    const std::string label = limbus_ui_labels::translate_status(source);
+    if (!label.empty() && label != source) {
+        *translated = label;
+        return true;
+    }
     if (index.empty()) return false;
     if (context_id && *context_id && field && *field) {
         const std::string key = translation_context_key(context_id, field, source);

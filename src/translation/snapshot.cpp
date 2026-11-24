@@ -473,6 +473,7 @@ bool parse_appsealing(const shared::JsonPtr &root, AppSealingPlan *out, std::str
     }
     if (exact) plan.exact_profile = exact->as_string();
     const shared::JsonPtr stable = root->opt("reportStable");
+    plan.report_stable = plan.report.present;
     if (stable && stable->is_bool()) plan.report_stable = stable->as_bool();
 
     plan.present = true;

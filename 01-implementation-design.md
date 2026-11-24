@@ -1,6 +1,6 @@
 # BYBUS KernelSU 原生汉化移植实现设计
 
-版本：2026-11-23。依据 `D:\BYBUS\source` 的提交 `bd3260848029ed41558da4f40a9c9edf6f622dd6`。本文是实现设计，尚未在真实设备上验证 Zygisk 注入后的游戏表现。
+版本：2026-11-24。依据 `D:\BYBUS\source` 的提交 `bd3260848029ed41558da4f40a9c9edf6f622dd6`。本文是实现设计，尚未在真实设备上验证 Zygisk 注入后的游戏表现。
 
 ## 1. 目标与边界
 
@@ -88,6 +88,15 @@ WebUI 仅调用 `status`、`sources list`、`sources select <id>`、`update star
   "archiveSha256": "64 lowercase hex characters",
   "gameVersionCode": 0,
   "gameInstallIdentity": "sha256-of-installed-package-identity",
+  "index": {
+    "schema": 9,
+    "path": "index/index.bin",
+    "sha256": "64 lowercase hex characters",
+    "bytes": 0,
+    "unique": 0,
+    "terms": 0,
+    "contextual": 0
+  },
   "entries": [
     {
       "resource": "Localize/jp/JP_Example.json",
@@ -102,6 +111,8 @@ WebUI 仅调用 `status`、`sources list`、`sources select <id>`、`update star
 
 上述字符串是格式占位符，构建器必须写入实际摘要和字节数。WebUI 和游戏进程均只消费经过 schema、路径、文件长度和摘要验证的清单。协议或配对规则变化时提升 schema，旧 generation 保留到新版本成功发布。
 
+`index` 是同一份清单里的第二个查表入口，承载按“源文本 → 译文”而非“资源名 + 原文摘要”组织的散文、术语与上下文索引，供不在 `Localize` 表里的文本（剧情、RPG 对话、选项、通知、UI 标签）使用。它按 `TranslationIndexCompiler.kt` 的 unique/terms/contextual 三类映射与冲突规则编译，二进制带 `LZTI1\0` 魔数与 schema 9，路径固定为 `index/index.bin`；三个计数必须与文件内容一致。`index` 与 `profile` 互相独立：缺 `index` 只关闭散文/术语查表，缺 `profile` 只关闭打补丁，两者都不阻止快照发布。索引同样参与 generation 摘要。
+
 构建先写临时目录并逐项校验，完成后刷新数据与目录元数据，再原子切换 `active` 指针。中断、解包失败或源文件在构建期间变化时，继续使用上一完整快照。游戏进程启动时固定使用一个 generation；WebUI 切源和后台更新不改变正在运行的进程。保留有限数量的旧 generation，确认没有运行进程引用后再清理。
 
 原文摘要以游戏加载器返回给 Hook 的 UTF-16 文本转换为 UTF-8 后计算。构建时若只拿到磁盘字节，需验证磁盘解码结果与游戏实际返回文本一致。BOM、换行或加载器预处理造成的差异应导致该表回退原文并留下诊断，不允许放宽为仅按文件名替换。
@@ -114,6 +125,20 @@ Zygisk 模块在进程 specialization 阶段识别官方包名、进程名和 UI
 
 进程内接口可收敛为 `SnapshotReader::open(readOnlyFd)`、`SnapshotReader::lookup(resourceKey, originalSha256)`、`TranslationRuntime::onTextRead(resourceKey, originalIl2cppString)` 和 `FontRuntime::ensureReady()`。`onTextRead` 调用原方法取得结果后才执行查找。句柄交付失败或查找未命中时不创建新字符串。运行时按 `generation`、命中数、未命中数和错误码记录计数，不保存正文。
 
+### 5.1 已实现的运行时覆盖面
+
+| 覆盖面 | 实现 | 状态 |
+| --- | --- | --- |
+| IL2CPP 绑定 | `src/runtime/il2cpp.*`：GCHandle 用 Unity 6 的 `void *` 语义；字段/类/方法反射 API 齐全；`find_verified_method` 校验声明类、参数类型、返回类型、泛型与静态性 | 已实现 |
+| 快照交付 | companion 通过 `SCM_RIGHTS` 交付 manifest/font/index 三个只读描述符；`SnapshotReader` 逐项校验长度与摘要 | 已实现 |
+| 表级替换 | `LoadLocalizeFileSync`、`TextAsset.get_text`：按 `(资源名, 原文摘要)` 命中后替换 | 已实现 |
+| 索引查表 | `src/runtime/translation_index.*`、`src/runtime/text_router.*`：JSON 表 → UI 状态标签 → contextual → unique → terms → 原文；失败一律返回原对象 | 已实现 |
+| 组件级文本 | UGUI `Text.set_text`（含字体替换）、TMP `set_text`/`set_text_string`、`Announcer.SetDescription`、`StorySystem.Dialog..ctor`、`RPGSystem.RpgLocText_Dialogue.GetTextData`、`ChoiceScrollViewBox.SetText`、`NoticeUIContentText.SetData`、`ActionChoiceButton.SetButtonData`，以及通用对象字符串字段 | 已实现 |
+| 富文本/注音、TMP 材质与字号 | `rich_text.h`、`font_proof.h`、`flow_text_proof.h`、`managed_state.h`、`font_materials.h`、`font_scale.h`、`text_provenance.h`、`method_flags.h` | 已移植未接入 |
+| 剧情/RPG/选项/通知状态机 | 原版 layout/flow/choice 状态机 | 未移植 |
+
+`text_router` 的路由顺序以代码为准：资源提示可用且文本像 JSON 时先走表级查找；否则先匹配枚举化的 UI 状态标签（`ui_labels`），再用 `上下文键 = id + 单元分隔符 + 字段 + 单元分隔符 + 源文本` 查 contextual，最后依次查 unique 与 terms。任何一步命中的译文与原文相同都视为未命中。
+
 Zygisk 入口要保持轻量；现有原生代码广泛使用 C++ 标准库，不能未经隔离就把整个 VirtualApp 原生库直接注入 Zygote。构建时应评估自包含 C++ 运行时与宿主库冲突，并在空模块阶段先验证加载和卸载。官方 Zygisk 样例对其 C++ STL 配置有专门说明。[Zygisk 样例](https://github.com/topjohnwu/zygisk-module-sample)
 
 中文字体沿用项目现有授权字体，并在模块安装或快照构建时按固定大小及 SHA-256 校验。Unity 当前的字体加载入口要求可读取的文件路径，因此快照句柄本身不能作为字体方案。首选在实机验证已打开字体描述符的 `/proc/self/fd/<n>` 路径是否可被 Unity 接受；若不支持，由后台服务在游戏私有数据的独立辅助目录放置经校验的字体副本，并配置游戏 UID 可读取的权限与上下文。该辅助目录不位于 `Localize` 或 Unity 下载资源目录。运行时确认字体加载成功后才返回中文 JSON，不能沿用原代码中从容器 `active-index.path` 反推出字体路径的假设。[原字体校验](../source/third_party/virtualapp-upstream/lib/src/main/java/com/lody/virtual/helper/compat/LimbusTranslationAssets.java) · [原字体路径](../source/third_party/virtualapp-upstream/lib/src/main/jni/Foundation/LimbusTranslationRuntime.cpp)
@@ -124,14 +149,15 @@ Zygisk 入口要保持轻量；现有原生代码广泛使用 C++ 标准库，�
 
 验收按以下顺序执行。
 
-1. WebUI 能识别模块、Zygisk 依赖、游戏安装状态，并显示固定错误码。
-2. 官方及本地归档通过校验后，可针对已有原文生成快照；同一输入重复构建得到相同内容。
-3. 在桌面样本上，新配对结果与原 Kotlin 配对器逐字段一致。
+1. WebUI 能识别模块、Zygisk 依赖、游戏安装状态，并显示固定错误码（含 `game.profileState`/`profileCode` 与 `runtime.compatState`）。
+2. 官方及本地归档通过校验后，可针对已有原文生成快照；同一输入重复构建得到相同内容。快照必须同时带 `index`，且 `manifest.json` 的 `index.sha256`/`bytes`/三个计数与 `index/index.bin` 一致。
+3. 在桌面样本上，新配对结果与原 Kotlin 配对器逐字段一致，索引编译结果与原 `TranslationIndexCompiler` 一致（unique/terms/contextual 三类条目与冲突消解）。
 
-    AppSealing 兼容注入的本地计划与运行时装在 `12-kernelsu-appsealing.md` 描述（`profile.appsealing` 计划、detach 兼容点、报告桥与站点补丁、失败回滚）；它只是实现说明，不作为实机通过证据。
-4. 空 Zygisk 模块下官方游戏到达标题页，再分别验证文本 Hook、字体和一张 UI 表的中文显示。
-5. 连续启动、切换来源、包更新、原文更新和构建中断均保留完整快照；新原文重新构建后在下一次游戏启动生效。
-6. 运行前后官方语言文件及下载清单摘要一致，游戏没有因本模块的汉化路径反复下载相同资源。
+    AppSealing 兼容注入的本地计划与运行时装在 `12-kernelsu-appsealing.md` 描述（`profile.appsealing` 计划、`guards` 复核、detach 兼容点、报告桥与站点补丁、失败回滚）；它只是实现说明，不作为实机通过证据。
+4. 构建期安装资格通过：SDK ≥ 26、arm64-v8a、所有 `PT_LOAD` 对齐合格、签名证书为官方 SHA-256；任一项不合格时构建必须以 `unsupported_runtime` 结束并不发布快照，而不是产出一个装不上的 generation。
+5. 空 Zygisk 模块下官方游戏到达标题页，再分别验证文本 Hook、字体和一张 UI 表的中文显示；随后验证索引查表（剧情/术语/上下文各一次命中）。
+6. 连续启动、切换来源、包更新、原文更新和构建中断均保留完整快照；新原文重新构建后在下一次游戏启动生效。
+7. 运行前后官方语言文件及下载清单摘要一致，游戏没有因本模块的汉化路径反复下载相同资源。
 
 ## 7. 开发顺序与剩余未知
 

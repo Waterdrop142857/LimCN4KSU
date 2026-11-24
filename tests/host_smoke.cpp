@@ -527,6 +527,8 @@ bybus::translation::AppSealingPlan sample_plan() {
     plan.stack.descriptor_count_offset = 8;
     plan.stack.descriptor_entries_offset = 24;
     plan.stack.descriptor_stride = 24;
+    plan.guards.push_back({0x700e4, 0xb942cbe0});
+    plan.report_stable = true;
     return plan;
 }
 
@@ -564,6 +566,8 @@ void test_appsealing_manifest() {
     check(decoded.profile.appsealing.present &&
               decoded.profile.appsealing.sites.size() == 2 &&
               decoded.profile.appsealing.report.code == 50048 &&
+              decoded.profile.appsealing.guards.size() == 1 &&
+              decoded.profile.appsealing.report_stable &&
               decoded.profile.appsealing.stack.descriptor_stride == 24,
           "manifest: appsealing fields preserved");
     const std::string digest = translation::appsealing_digest(manifest.profile.appsealing);

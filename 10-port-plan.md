@@ -1,6 +1,6 @@
 # BYBUS → KernelSU 原生模块移植实施方案
 
-版本：2026-11-23。基准：`D:\BYBUS\source` 提交 `bd32608`。规范来源：`01-implementation-design.md`、`02-code-quality-standard.md`。本目录独立于原仓库，产物不写入 `ksu-native-design/` 之外。
+版本：2026-11-24。基准：`D:\BYBUS\source` 提交 `bd32608`。规范来源：`01-implementation-design.md`、`02-code-quality-standard.md`。本目录独立于原仓库，产物不写入 `ksu-native-design/` 之外。
 
 ## 1. 运行边界与目录映射
 
@@ -10,7 +10,7 @@
 | `control` | `src/control/` | `bybusctl`：参数校验、IPC 客户端、固定 JSON 响应 |
 | `service` | `src/service/` | `bybusd`：任务队列、代次发布、原文发现、字体准备 |
 | `translation` | `src/translation/` | 纯数据：归档导入、配对器、快照构建 |
-| `runtime` | `src/runtime/` | Zygisk 模块、IL2CPP 发现与 Hook、快照查找、字体 |
+| `runtime` | `src/runtime/` | Zygisk 模块、IL2CPP 发现与 Hook、快照/索引查找与文本路由、字体 |
 | `shared` | `src/shared/` | JSON、SHA-256、UTF 编解码、协议码、文件工具 |
 | 第三方 | `third_party/{lzma-sdk,zygisk,substrate}` | 见 `THIRD_PARTY-NOTICES.md` 与各自 `VENDOR-RECORD.txt` |
 
@@ -50,6 +50,7 @@ module/
   generations/<gen>/         # 不可变快照
     manifest.json
     tables/<sha256>.json
+    index/index.bin          # schema 9 翻译索引（本轮新增）
     font/ChineseFont.ttf
   active                     # 原子切换的快照指针（内容为 generation id）
   jobs/<job>.json            # 任务持久状态
@@ -73,6 +74,26 @@ module/
 | `.../Foundation/LimbusOwnedCode.h` | `src/runtime/owned_code.h` | 保留自有代码段的范围表示，只用于按清单重算范围 CRC 与指纹；账本同时覆盖 `libil2cpp.so` 与 `libcovault-appsec.so` |
 | `.../Foundation/IORelocator64.cpp`（AppSealing 部分） | `src/translation/appsealing_profile.cpp`、`src/translation/appsealing_profile.h` | 只移植站点资格判定与计划生成（`profile.appsealing`）；容器 I/O 重定向、`MapsRedirector` 与 `syscall` Hook 不移植 |
 | `And64InlineHook.cpp`、`SubstrateHook.cpp` | `third_party/substrate/` | 原文件与 MIT/BSD 声明一并移植 |
+| `container/TranslationIndexCompiler.kt` | `src/translation/index_compiler.cpp`/`.h`、`src/runtime/translation_index.cpp`/`.h` | 逐规则等价：unique/terms/contextual 三类映射、显示与术语过滤、冲突消解、确定性摘要；二进制写 `LZTI1\0` + schema 9，读取端在校验魔数、schema 与三个计数后建表 |
+| `Foundation/LimbusRichText.h` | `src/runtime/rich_text.h` | 逐字节移植；只提供富文本判定，不翻译、不改写标签 |
+| `Foundation/LimbusFontProof.h`、`LimbusFlowTextProof.h` | `src/runtime/font_proof.h`、`flow_text_proof.h` | 逐字节移植；组件级“完整文本已证明”判定与渐进视图 |
+| `Foundation/LimbusManagedState.h`、`LimbusFontMaterials.h`、`LimbusFontScale.h` | `src/runtime/managed_state.h`、`font_materials.h`、`font_scale.h` | 逐字节移植；托管对象租约、材质回填与字号基准 |
+| `Foundation/LimbusTextProvenance.h` | `src/runtime/text_provenance.h` | 逐字节移植；只拥有本模块写过的值，游戏后续写入优先 |
+| `Foundation/LimbusUiLabels.h`、`LimbusMethodFlags.h` | `src/runtime/ui_labels.h`、`method_flags.h` | `ui_labels` 已接入 `text_router`；`method_flags` 提供实例方法判定，尚未接入 |
+| `helper/compat/LimbusNativeProfile.java`、`LimbusNativeStructure.java` | `src/service/apk_signature.cpp`、`src/service/android_manifest.cpp`、`src/service/native_alignment.cpp` | 用原生实现替掉 Java 侧 `PackageManager` 查询：APK Signing Block v2/v3 证书 SHA-256、AXML `<application android:name>`、PT_LOAD 对齐/必需库/重复库；资格判定语义与 `requireLibraryAlignment` 一致 |
+
+### 2.1 运行时覆盖现状
+
+| 环节 | 已接入 | 未接入 |
+| --- | --- | --- |
+| IL2CPP 绑定 | GCHandle `void *`、字段反射、`find_verified_method` | — |
+| Hook | `LoadLocalizeFileSync`、`TextAsset.get_text`、UGUI `Text.set_text`、TMP `set_text`/`set_text_string`、`Announcer.SetDescription`、`StorySystem.Dialog..ctor`、`RPGSystem.RpgLocText_Dialogue.GetTextData`、`ChoiceScrollViewBox.SetText`、`NoticeUIContentText.SetData`、`ActionChoiceButton.SetButtonData`、通用对象字符串字段 | TMP 材质/字号/多语言字体 setter；富文本与注音 Hook |
+| 文本解析 | JSON 表、UI 状态标签、contextual/unique/terms 索引 | 原版剧情/RPG/选项/通知的 layout/flow/choice 状态机 |
+| 交付与校验 | manifest/font/index 三描述符、索引字节数与计数校验、旧 generation 无索引兼容 | — |
+| AppSealing | 计划 + `guards` 复核、detach 兼容点、报告桥、站点补丁、瞬时维护、SIGILL 守卫、双库账本 | SIGSEGV 守卫（本模块无 `MapsRedirector` 路径） |
+| 资格 | 构建期 SDK/ABI/PT_LOAD 对齐/官方签名四项门禁 | — |
+
+`rich_text.h`、`font_proof.h`、`flow_text_proof.h`、`managed_state.h`、`font_materials.h`、`font_scale.h`、`text_provenance.h`、`method_flags.h` 只做了逐字节移植与独立 arm64 编译，不在 `build/build.ps1` 的编译单元里，也没有被任何 `.cpp` 引用。接入顺序建议：`rich_text` → `font_proof`/`flow_text_proof` → `managed_state`/`font_materials`/`font_scale` → `text_provenance`，每步都先接入再编译，避免一次性引入无法定位的回归。
 
 ## 3. 与设计文档的已知偏差
 
@@ -84,6 +105,8 @@ module/
 ## 4. 关键契约
 
 - 快照条目同时绑定：源 id、归档 SHA-256、游戏安装标识、规范资源名、原文 UTF-8 摘要、合并结果摘要与字节长度。运行时按 `(资源名, 原文摘要)` 命中，文件名单独命中不替换。
+- 索引与表同级：`manifest.json` 的 `index` 声明 schema 9、路径（只允许 `index/index.bin`）、SHA-256、字节数与三个计数，任一项与文件不符即整份清单被拒；`index` 与 `profile` 互不依赖，也都不阻止快照发布。
+- 索引与 `profile` 都参与 generation 摘要，因此“只重建索引”或“只换计划”都会得到新 generation，旧 generation 仍可服务正在运行的进程。
 - 一个 generation 发布后只读；`active` 指针以 `rename` 原子切换；中断只留临时目录，启动时清理 `imports/`、`generations/.tmp-*`。
 - 游戏进程启动时固定一个 generation；后台发布的新 generation 只服务下一次启动。
 - 游戏主线程不做网络、解包、全量配对；运行时只用启动期载入的索引与每表一次性摘要查找。
@@ -91,16 +114,19 @@ module/
 
 ## 5. 开发顺序
 
-1. `shared` + `translation` 纯数据层与桌面测试夹具。
-2. `service`（任务、代次、原文发现、字体）与 `control`。
-3. WebUI 静态页面。
-4. `runtime`：空 Zygisk 模块 → `LoadLocalizeFileSync` 读后合并 → 字体 → 单表中文显示。
-5. 打包、校验、安装/禁用/卸载回归。
+1. `shared` + `translation` 纯数据层与桌面测试夹具。**已完成**
+2. `service`（任务、代次、原文发现、字体、APK 资格）与 `control`。**已完成**
+3. WebUI 静态页面。**已完成**（含 `profileState`/`profileCode` 与 `compatState` 展示）
+4. `runtime`：空 Zygisk 模块 → `LoadLocalizeFileSync` 读后合并 → 索引查表与组件级 Hook → 字体 → 单表中文显示。**部分完成**：Hook 与索引已接入，实机未验证
+5. 打包、校验、安装/禁用/卸载回归。**桌面已通过，实机未验证**
+6. 剩余：TMP 材质/字号/多语言字体与富文本/注音接入、剧情/RPG/选项/通知状态机移植。
 
 ## 6. 未在设备上验证的未知
 
 - 游戏原文目录与表名清单（`Localize/jp|en|kr/...`）需按实际安装确认。
 - 加载器是否改变 JSON 字节表示（BOM、换行、预处理）需实测；不一致时该表回退原文并写诊断。
 - 设备上由 root 守护进程读取 `/sdcard/Download/...` 的实际访问权限；失败时改用 `inbox/` 或其他可读绝对路径。
-- 注入后的游戏保护反馈需按版本分别记录：AppSealing 兼容注入（detach 兼容点、50048 报告桥、70034/50040 站点、471 瞬时维护、SIGILL 守卫）已移植，但实际检查时机与反应仍要实机确认，见 `12-kernelsu-appsealing.md` 与 `40-validation-matrix.md` 的 L0–L3。
+- 注入后的游戏保护反馈需按版本分别记录：AppSealing 兼容注入（detach 兼容点、50048 报告桥、70034/50040 站点、471 瞬时维护、SIGILL 守卫、`guards` 复核）已移植，但实际检查时机与反应仍要实机确认，见 `12-kernelsu-appsealing.md` 与 `40-validation-matrix.md` 的 L0–L3。
 - `/proc/self/fd/<n>` 作为 Unity 字体路径是否被接受；不接受时使用辅助目录副本。
+- 索引的实机表现：schema 9 二进制读取、`index/index.bin` 在真实字典量级下的体积与加载耗时、第三个描述符在 Unity 加载压力下的稳定性。
+- 构建期资格门是否覆盖所有官方分发形态：分包 APK 的签名与对齐、Game 更新后的 SDK/ABI 变化都会让构建直接失败，需按版本重新确认。

@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "CydiaSubstrate.h"
@@ -29,13 +30,28 @@ typedef void *(*load_localize_fn)(void *instance, void *path, const void *method
 typedef void *(*text_asset_text_fn)(void *instance, const void *method);
 typedef void (*ui_set_text_fn)(void *instance, void *text, const void *method);
 typedef void (*tmp_set_text_fn)(void *instance, void *text, const void *method);
+typedef void (*tmp_set_text_string_fn)(void *instance, void *text, bool sync_input,
+                                       const void *method);
 typedef void (*announcer_set_text_fn)(void *instance, void *text, const void *method);
+typedef void (*story_dialog_ctor_fn)(void *instance, int32_t arg0, int32_t arg1, void *script,
+                                     void *effects, float time, const void *method);
+typedef void *(*rpg_dialogue_text_fn)(void *instance, int32_t index, const void *method);
+typedef void (*choice_set_text_fn)(void *instance, void *text, const void *method);
+typedef void (*notice_set_data_fn)(void *instance, void *text, const void *method);
+typedef void (*choice_button_fn)(void *instance, int32_t selection, void *message, void *result,
+                                 const void *method);
 
 load_localize_fn g_original_load_localize = nullptr;
 text_asset_text_fn g_original_text_asset_text = nullptr;
 ui_set_text_fn g_original_ui_set_text = nullptr;
 tmp_set_text_fn g_original_tmp_set_text = nullptr;
+tmp_set_text_string_fn g_original_tmp_set_text_string = nullptr;
 announcer_set_text_fn g_original_announcer_set_text = nullptr;
+story_dialog_ctor_fn g_original_story_dialog_ctor = nullptr;
+rpg_dialogue_text_fn g_original_rpg_dialogue_text = nullptr;
+choice_set_text_fn g_original_choice_set_text = nullptr;
+notice_set_data_fn g_original_notice_set_data = nullptr;
+choice_button_fn g_original_choice_button = nullptr;
 void *g_text_asset_class = nullptr;
 void *g_legacy_font = nullptr;
 void *g_legacy_font_handle = nullptr;
@@ -167,6 +183,79 @@ void *translate_text(const std::string &resource_key, void *original) {
     return replacement;
 }
 
+void translate_object_strings(void *instance) {
+    RuntimeState &runtime = state();
+    const Il2CppApi &api = runtime.api;
+    if (!instance || !api.object_get_class || !api.class_get_fields || !api.field_get_type ||
+        !api.field_get_value || !api.field_set_value || !api.type_get_name || !api.free_memory) {
+        return;
+    }
+    void *klass = api.object_get_class(instance);
+    if (!klass) return;
+    void *iterator = nullptr;
+    int fields = 0;
+    while (const void *field = api.class_get_fields(klass, &iterator)) {
+        if (++fields > 512) break;
+        if (api.field_get_flags && (api.field_get_flags(field) & 0x0010u) != 0) continue;
+        const void *type = api.field_get_type(field);
+        char *type_name = type ? api.type_get_name(type) : nullptr;
+        if (!type_name) continue;
+        const bool is_string = ::strcmp(type_name, "System.String") == 0;
+        api.free_memory(type_name);
+        if (!is_string) continue;
+        void *value = nullptr;
+        api.field_get_value(instance, field, &value);
+        if (!value) continue;
+        void *replacement = translate_managed_string(value, nullptr, nullptr, nullptr);
+        if (replacement != value) api.field_set_value(instance, field, &replacement);
+    }
+}
+
+void replacement_story_dialog_ctor(void *instance, int32_t arg0, int32_t arg1, void *script,
+                                   void *effects, float time, const void *method) {
+    if (g_original_story_dialog_ctor) {
+        g_original_story_dialog_ctor(instance, arg0, arg1, script, effects, time, method);
+    }
+    if (state().enabled.load()) translate_object_strings(instance);
+}
+
+void *replacement_rpg_dialogue_text(void *instance, int32_t index, const void *method) {
+    if (state().enabled.load()) translate_object_strings(instance);
+    void *result = g_original_rpg_dialogue_text
+                       ? g_original_rpg_dialogue_text(instance, index, method)
+                       : nullptr;
+    if (state().enabled.load()) translate_object_strings(result);
+    return result;
+}
+
+void replacement_choice_set_text(void *instance, void *managed_text, const void *method) {
+    RuntimeState &runtime = state();
+    if (instance && managed_text && runtime.enabled.load()) {
+        managed_text = translate_managed_string(managed_text, nullptr, nullptr, nullptr);
+    }
+    if (g_original_choice_set_text) g_original_choice_set_text(instance, managed_text, method);
+}
+
+void replacement_notice_set_data(void *instance, void *managed_text, const void *method) {
+    RuntimeState &runtime = state();
+    if (instance && managed_text && runtime.enabled.load()) {
+        managed_text = translate_managed_string(managed_text, nullptr, nullptr, nullptr);
+    }
+    if (g_original_notice_set_data) g_original_notice_set_data(instance, managed_text, method);
+}
+
+void replacement_choice_button(void *instance, int32_t selection, void *message, void *result,
+                               const void *method) {
+    RuntimeState &runtime = state();
+    if (runtime.enabled.load()) {
+        if (message) message = translate_managed_string(message, nullptr, nullptr, nullptr);
+        if (result) result = translate_managed_string(result, nullptr, nullptr, nullptr);
+    }
+    if (g_original_choice_button) {
+        g_original_choice_button(instance, selection, message, result, method);
+    }
+}
+
 void *replacement_load_localize(void *instance, void *path, const void *method) {
     void *original =
         g_original_load_localize ? g_original_load_localize(instance, path, method) : nullptr;
@@ -260,6 +349,17 @@ void replacement_tmp_set_text(void *instance, void *managed_text, const void *me
         managed_text = translate_managed_string(managed_text, nullptr, nullptr, nullptr);
     }
     if (g_original_tmp_set_text) g_original_tmp_set_text(instance, managed_text, method);
+}
+
+void replacement_tmp_set_text_string(void *instance, void *managed_text, bool sync_input,
+                                     const void *method) {
+    RuntimeState &runtime = state();
+    if (instance && managed_text && runtime.enabled.load()) {
+        managed_text = translate_managed_string(managed_text, nullptr, nullptr, nullptr);
+    }
+    if (g_original_tmp_set_text_string) {
+        g_original_tmp_set_text_string(instance, managed_text, sync_input, method);
+    }
 }
 
 void replacement_announcer_set_description(void *instance, void *managed_text,
@@ -373,6 +473,24 @@ bool install_text_hooks() {
     } else {
         log_warn("tmp text hook unavailable");
     }
+    const MethodSpec tmp_string_spec{"set_text_string", "System.String,System.Boolean",
+                                     "System.Void", false};
+    const void *tmp_string_method =
+        tmp_text ? find_verified_method(runtime.api, tmp_text, tmp_string_spec) : nullptr;
+    if (tmp_string_method) {
+        if (!hook_method(runtime, tmp_string_method,
+                         reinterpret_cast<void *>(replacement_tmp_set_text_string),
+                         reinterpret_cast<void **>(&g_original_tmp_set_text_string))) {
+            runtime.ledger.restore_module(reinterpret_cast<uintptr_t>(runtime.api.base));
+            g_original_load_localize = nullptr;
+            g_original_text_asset_text = nullptr;
+            g_original_ui_set_text = nullptr;
+            g_original_tmp_set_text = nullptr;
+            g_original_tmp_set_text_string = nullptr;
+            log_warn("tmp set_text_string hook rejected");
+            return false;
+        }
+    }
     void *announcer = find_class(runtime.api, "BattleUI.Announcer", "BattleAnnouncerUI");
     if (!announcer) announcer = find_class(runtime.api, "BattleUI", "Announcer");
     const MethodSpec announcer_spec{"SetDescription", "System.String", "System.Void", false};
@@ -387,12 +505,101 @@ bool install_text_hooks() {
             g_original_text_asset_text = nullptr;
             g_original_ui_set_text = nullptr;
             g_original_tmp_set_text = nullptr;
+            g_original_tmp_set_text_string = nullptr;
             g_original_announcer_set_text = nullptr;
             log_warn("announcer hook rejected");
             return false;
         }
     } else {
         log_warn("announcer hook unavailable");
+    }
+    void *story_dialog = find_class(runtime.api, "StorySystem", "Dialog");
+    const MethodSpec story_spec{
+        ".ctor", "System.Int32,System.Int32,SimpleJSON.JSONNode,SimpleJSON.JSONNode,System.Single",
+        "System.Void", false};
+    const void *story_method =
+        story_dialog ? find_verified_method(runtime.api, story_dialog, story_spec) : nullptr;
+    if (story_method) {
+        if (!hook_method(runtime, story_method,
+                         reinterpret_cast<void *>(replacement_story_dialog_ctor),
+                         reinterpret_cast<void **>(&g_original_story_dialog_ctor))) {
+            runtime.ledger.restore_module(reinterpret_cast<uintptr_t>(runtime.api.base));
+            g_original_load_localize = nullptr;
+            g_original_text_asset_text = nullptr;
+            g_original_ui_set_text = nullptr;
+            g_original_tmp_set_text = nullptr;
+            g_original_tmp_set_text_string = nullptr;
+            g_original_announcer_set_text = nullptr;
+            g_original_story_dialog_ctor = nullptr;
+            log_warn("story dialog hook rejected");
+            return false;
+        }
+    } else {
+        log_warn("story dialog hook unavailable");
+    }
+    void *rpg_dialogue = find_class(runtime.api, "RPGSystem", "RpgLocText_Dialogue");
+    const MethodSpec rpg_spec{"GetTextData", "System.Int32", "RPGSystem.RpgLocDialogueText",
+                              false};
+    const void *rpg_method =
+        rpg_dialogue ? find_verified_method(runtime.api, rpg_dialogue, rpg_spec) : nullptr;
+    if (rpg_method) {
+        if (!hook_method(runtime, rpg_method,
+                         reinterpret_cast<void *>(replacement_rpg_dialogue_text),
+                         reinterpret_cast<void **>(&g_original_rpg_dialogue_text))) {
+            runtime.ledger.restore_module(reinterpret_cast<uintptr_t>(runtime.api.base));
+            g_original_load_localize = nullptr;
+            g_original_text_asset_text = nullptr;
+            g_original_ui_set_text = nullptr;
+            g_original_tmp_set_text = nullptr;
+            g_original_tmp_set_text_string = nullptr;
+            g_original_announcer_set_text = nullptr;
+            g_original_story_dialog_ctor = nullptr;
+            g_original_rpg_dialogue_text = nullptr;
+            log_warn("rpg dialogue hook rejected");
+            return false;
+        }
+    } else {
+        log_warn("rpg dialogue hook unavailable");
+    }
+    void *choice_scroll = find_class(runtime.api, "", "ChoiceScrollViewBox");
+    const MethodSpec choice_text_spec{"SetText", "System.String", "System.Void", false};
+    const void *choice_text_method =
+        choice_scroll ? find_verified_method(runtime.api, choice_scroll, choice_text_spec) : nullptr;
+    if (choice_text_method) {
+        if (!hook_method(runtime, choice_text_method,
+                         reinterpret_cast<void *>(replacement_choice_set_text),
+                         reinterpret_cast<void **>(&g_original_choice_set_text))) {
+            runtime.ledger.restore_module(reinterpret_cast<uintptr_t>(runtime.api.base));
+            log_warn("choice text hook rejected");
+            return false;
+        }
+    }
+    void *notice_content = find_class(runtime.api, "MainUI.NoticeUI", "NoticeUIContentText");
+    const MethodSpec notice_spec{"SetData", "System.String", "System.Void", false};
+    const void *notice_method =
+        notice_content ? find_verified_method(runtime.api, notice_content, notice_spec) : nullptr;
+    if (notice_method) {
+        if (!hook_method(runtime, notice_method,
+                         reinterpret_cast<void *>(replacement_notice_set_data),
+                         reinterpret_cast<void **>(&g_original_notice_set_data))) {
+            runtime.ledger.restore_module(reinterpret_cast<uintptr_t>(runtime.api.base));
+            log_warn("notice data hook rejected");
+            return false;
+        }
+    }
+    void *choice_button = find_class(runtime.api, "", "ActionChoiceButton");
+    const MethodSpec button_spec{"SetButtonData", "System.Int32,System.String,System.String",
+                                 "System.Void", false};
+    const void *button_method =
+        choice_button ? find_verified_method(runtime.api, choice_button, button_spec) : nullptr;
+    if (button_method) {
+        if (!hook_method(runtime, button_method,
+                         reinterpret_cast<void *>(replacement_choice_button),
+                         reinterpret_cast<void **>(&g_original_choice_button))) {
+            runtime.ledger.restore_module(reinterpret_cast<uintptr_t>(runtime.api.base));
+            log_warn("choice button hook rejected");
+            return false;
+        }
     }
     g_text_asset_class = text_asset;
     uint32_t live = 0;

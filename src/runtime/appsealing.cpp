@@ -411,9 +411,11 @@ bool verify_plan_runtime(uintptr_t base, std::string *error) {
         return false;
     }
     if (plan_state().report.present &&
-        (!matches_words(base, plan_state().report.entry_vaddr, plan_state().report.expected) ||
+        (!plan_state().report_stable ||
+         !matches_words(base, plan_state().report.entry_vaddr, plan_state().report.expected) ||
          !matches_words(base, plan_state().report.pattern_vaddr, plan_state().report.pattern))) {
-        *error = "appsealing_report_entry";
+        *error = plan_state().report_stable ? "appsealing_report_entry"
+                                            : "appsealing_report_unstable";
         return false;
     }
     return true;

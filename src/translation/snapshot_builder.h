@@ -27,6 +27,14 @@ struct BuildInputs {
     std::string package_name;             // verified installed package name
     std::string game_apk_path;            // installed base.apk used for the profile
     std::vector<std::string> game_apk_paths; // all installed APK splits, in pm order
+    int32_t sdk = 0;
+    uint64_t page_size = 0;
+    std::string abi;
+    std::string signer_sha256;
+    std::string application_class;
+    bool declares_protection = false;
+    bool native_alignment_ok = false;
+    std::string native_alignment_error;
     std::string font_source_path;         // empty when no font is published
     std::vector<GameTable> originals;
     std::vector<ImportedTable> pack;

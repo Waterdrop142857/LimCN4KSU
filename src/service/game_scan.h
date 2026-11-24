@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "service/diagnostics.h"
+#include "service/native_alignment.h"
 #include "service/paths.h"
 #include "shared/status.h"
 #include "translation/snapshot_builder.h"
@@ -27,6 +28,14 @@ struct GameInstall {
     std::string version_name;
     std::string install_identity;  // 64 lowercase hex when installed
     std::vector<std::string> apk_paths;
+    int64_t last_update_time = 0;
+    int32_t sdk = 0;
+    uint64_t page_size = 0;
+    std::string abi;
+    std::string signer_sha256;
+    std::string application_class;
+    bool declares_protection = false;
+    NativeAlignmentResult native_alignment;
 };
 
 struct GameTextFile {

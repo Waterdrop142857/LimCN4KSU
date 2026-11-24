@@ -17,6 +17,9 @@
 namespace bybus::translation {
 namespace {
 
+constexpr const char *kOfficialSigner =
+    "9ea88fdc27195dfef99050f88a889cad86cdf1a80faca2e22d6464d47f973145";
+
 
 bool starts_with(const std::string &text, const char *prefix) {
     const std::string head(prefix);
@@ -105,6 +108,19 @@ BuildOutcome build_generation(const BuildInputs &inputs) {
     if (!shared::is_sha256_hex(inputs.archive_sha256) ||
         !shared::is_sha256_hex(inputs.game_install_identity) || inputs.source_id.empty()) {
         return failure(shared::Code::InvalidArgument, "build_inputs");
+    }
+    if (inputs.page_size != 0) {
+        if (inputs.sdk < 26) return failure(shared::Code::UnsupportedRuntime, "qualification_sdk");
+        if (inputs.abi.find("arm64-v8a") == std::string::npos) {
+            return failure(shared::Code::UnsupportedRuntime, "qualification_abi");
+        }
+        if (!inputs.native_alignment_ok) {
+            return failure(shared::Code::UnsupportedRuntime,
+                           "qualification_native_" + inputs.native_alignment_error);
+        }
+        if (inputs.signer_sha256 != kOfficialSigner) {
+            return failure(shared::Code::UnsupportedRuntime, "qualification_signer");
+        }
     }
     std::unordered_map<std::string, const ImportedTable *> pack;
     pack.reserve(inputs.pack.size());

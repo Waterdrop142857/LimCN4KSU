@@ -356,6 +356,12 @@ void serve_companion(int client_socket) {
                 }
                 int font_fd = ::open((generation_dir + "/" + translation::kFontRelativePath).c_str(),
                                      O_RDONLY | O_CLOEXEC);
+                if (index_required && font_fd < 0) {
+                    ::close(manifest_fd);
+                    send_frame(client_socket, static_cast<uint32_t>(CompanionStatus::IoError),
+                               std::string(), nullptr, 0);
+                    break;
+                }
                 int index_fd = -1;
                 if (index_required) {
                     index_fd = ::open((generation_dir + "/index/index.bin").c_str(),

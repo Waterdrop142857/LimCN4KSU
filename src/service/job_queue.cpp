@@ -436,6 +436,14 @@ shared::Code JobQueue::build_and_publish(JobView *view, const JobSpec &spec,
     inputs.game_install_identity = install.install_identity;
     inputs.package_name = install.package_name;
     inputs.game_apk_paths = install.apk_paths;
+    inputs.sdk = install.sdk;
+    inputs.page_size = install.page_size;
+    inputs.abi = install.abi;
+    inputs.signer_sha256 = install.signer_sha256;
+    inputs.application_class = install.application_class;
+    inputs.declares_protection = install.declares_protection;
+    inputs.native_alignment_ok = install.native_alignment.ok;
+    inputs.native_alignment_error = install.native_alignment.error;
     inputs.font_source_path = paths_.font_source();
     inputs.originals = std::move(texts.tables);
     inputs.pack = tables;

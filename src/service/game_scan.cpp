@@ -5,6 +5,7 @@
 #include "service/game_scan.h"
 
 #include <sys/stat.h>
+#include <sys/system_properties.h>
 #include <unistd.h>
 
 #include <cstddef>
@@ -12,6 +13,8 @@
 #include <utility>
 #include <vector>
 
+#include "service/android_manifest.h"
+#include "service/apk_signature.h"
 #include "service/process_exec.h"
 #include "shared/fs.h"
 #include "shared/sha256.h"
@@ -81,6 +84,19 @@ std::vector<std::string> parse_package_paths(const std::string &output) {
 }
 
 void parse_version_fields(const std::string &output, GameInstall *install) {
+    const std::string update_key = "lastUpdateTime=";
+    const size_t update_at = output.find(update_key);
+    if (update_at != std::string::npos) {
+        size_t cursor = update_at + update_key.size();
+        int64_t value = 0;
+        bool any = false;
+        while (cursor < output.size() && output[cursor] >= '0' && output[cursor] <= '9') {
+            if (value < 1000000000000000LL) value = value * 10 + (output[cursor] - '0');
+            any = true;
+            ++cursor;
+        }
+        if (any) install->last_update_time = value;
+    }
     const std::string code_key = "versionCode=";
     const size_t code_at = output.find(code_key);
     if (code_at != std::string::npos) {
@@ -109,8 +125,18 @@ void parse_version_fields(const std::string &output, GameInstall *install) {
     }
 }
 
-std::string identity_of(const std::vector<std::string> &paths) {
+std::string property_value(const char *name) {
+    char buffer[PROP_VALUE_MAX] = {};
+    const int length = __system_property_get(name, buffer);
+    return length > 0 ? std::string(buffer, static_cast<size_t>(length)) : std::string();
+}
+
+std::string identity_of(const std::vector<std::string> &paths, const GameInstall &install) {
     std::string joined;
+    joined += "signer|" + install.signer_sha256 + "|sdk|" + std::to_string(install.sdk) +
+              "|page|" + std::to_string(install.page_size) + "|abi|" + install.abi +
+              "|update|" + std::to_string(install.last_update_time) + "|app|" +
+              install.application_class + "|";
     for (const std::string &path : paths) {
         struct stat info {};
         if (::stat(path.c_str(), &info) != 0) continue;
@@ -122,7 +148,7 @@ std::string identity_of(const std::vector<std::string> &paths) {
         joined += std::to_string(static_cast<long long>(info.st_mtime));
         joined.push_back('|');
     }
-    if (joined.empty()) return std::string();
+    if (joined.find("package|") == std::string::npos) return std::string();
     return shared::Sha256::hex(joined);
 }
 
@@ -249,13 +275,39 @@ shared::Code probe_install(GameInstall *out, Logger *log) {
         return shared::Code::GameMissing;
     }
     install.apk_paths = parse_package_paths(listed.output);
-    install.install_identity = identity_of(install.apk_paths);
+    install.sdk = 0;
+    const std::string sdk_text = property_value("ro.build.version.sdk");
+    if (!sdk_text.empty()) {
+        int value = 0;
+        for (const char c : sdk_text) {
+            if (c < '0' || c > '9') break;
+            value = value * 10 + (c - '0');
+        }
+        install.sdk = value;
+    }
+    install.page_size = static_cast<uint64_t>(::sysconf(_SC_PAGESIZE));
+    install.abi = property_value("ro.product.cpu.abilist");
+    if (install.abi.empty()) install.abi = property_value("ro.product.cpu.abi");
+    if (!install.apk_paths.empty()) {
+        const ApkSignatureResult signer = read_apk_signer(install.apk_paths.front());
+        if (signer.ok) install.signer_sha256 = signer.signer_sha256;
+        const AndroidManifestInfo manifest = read_android_manifest(install.apk_paths.front());
+        if (manifest.ok) {
+            install.application_class = manifest.application_class;
+        }
+    }
+    install.declares_protection =
+        install.application_class == "com.inka.appsealing.AppSealingApplication";
+    install.native_alignment =
+        validate_native_alignment(install.apk_paths, install.page_size);
+    install.install_identity = identity_of(install.apk_paths, install);
     if (install.apk_paths.empty() || install.install_identity.empty()) {
         *out = install;
         return shared::Code::GameMissing;
     }
     install.installed = true;
     if (!is_executable_file(kDumpsysPath)) {
+        install.install_identity = identity_of(install.apk_paths, install);
         *out = install;
         return shared::Code::Ok;
     }
@@ -267,6 +319,7 @@ shared::Code probe_install(GameInstall *out, Logger *log) {
     if (dumped.spawned && !dumped.timed_out && dumped.exit_code == 0) {
         parse_version_fields(dumped.output, &install);
     }
+    install.install_identity = identity_of(install.apk_paths, install);
     *out = install;
     return shared::Code::Ok;
 }
