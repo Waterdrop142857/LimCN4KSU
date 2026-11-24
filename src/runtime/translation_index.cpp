@@ -31,15 +31,14 @@ bool read_string(const std::string &bytes, size_t *at, std::string *value) {
     return true;
 }
 
-bool read_map(const std::string &bytes, size_t *at,
-              std::unordered_map<std::string, std::string> *out) {
-    uint32_t count = 0;
-    if (!read_u32(bytes, at, &count) || count > kMaxEntries) return false;
+bool read_group(const std::string &bytes, size_t *at, uint32_t count,
+                std::unordered_map<std::string, std::string> *out) {
     out->reserve(count);
     for (uint32_t i = 0; i < count; ++i) {
         std::string key;
         std::string value;
-        if (!read_string(bytes, at, &key) || !read_string(bytes, at, &value) || key.empty()) {
+        if (!read_string(bytes, at, &key) || !read_string(bytes, at, &value) || key.empty() ||
+            value.empty()) {
             return false;
         }
         out->emplace(std::move(key), std::move(value));
@@ -53,7 +52,9 @@ bool TranslationIndex::load(const std::string &bytes, std::string *error) {
     unique_.clear();
     terms_.clear();
     contextual_.clear();
-    if (bytes.size() < sizeof(kMagic) + 4) {
+    // "LZTI1\0" + schema + the three map counts, then the payload groups.
+    constexpr size_t kHeaderSize = sizeof(kMagic) + 4 * 4;
+    if (bytes.size() < kHeaderSize) {
         *error = "index_truncated";
         return false;
     }
@@ -67,8 +68,15 @@ bool TranslationIndex::load(const std::string &bytes, std::string *error) {
         *error = "index_schema";
         return false;
     }
-    if (!read_map(bytes, &at, &unique_) || !read_map(bytes, &at, &terms_) ||
-        !read_map(bytes, &at, &contextual_)) {
+    uint32_t counts[3] = {0, 0, 0};
+    for (uint32_t &count : counts) {
+        if (!read_u32(bytes, &at, &count) || count > kMaxEntries) {
+            *error = "index_shape";
+            return false;
+        }
+    }
+    if (!read_group(bytes, &at, counts[0], &unique_) || !read_group(bytes, &at, counts[1], &terms_) ||
+        !read_group(bytes, &at, counts[2], &contextual_)) {
         *error = "index_shape";
         return false;
     }

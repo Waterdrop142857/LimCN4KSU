@@ -11,13 +11,20 @@ $compiler = Get-Command cl.exe -ErrorAction SilentlyContinue
 if (-not $compiler) { throw 'MSVC cl.exe not found; set BYBUS_HOST_ENV' }
 $out = Join-Path $PSScriptRoot 'out'
 New-Item -ItemType Directory -Force -Path $out | Out-Null
-$sources = @(
-    'tests/host_smoke.cpp',
+# Every tests/*.cpp registers its cases through tests/harness.h, so adding a
+# test file needs no change here.
+$testSources = @(Get-ChildItem -Path (Join-Path $root 'tests') -Filter *.cpp -File |
+    Sort-Object Name | ForEach-Object { $_.FullName })
+if ($testSources.Count -eq 0) { throw 'no tests/*.cpp found' }
+$librarySources = @(
     'src/shared/json.cpp', 'src/shared/sha256.cpp', 'src/shared/utf.cpp',
     'src/translation/text_policy.cpp', 'src/translation/json_pairer.cpp',
     'src/translation/snapshot.cpp', 'src/translation/appsealing_profile.cpp',
-    'src/translation/index_compiler.cpp', 'src/runtime/translation_index.cpp'
+    'src/translation/index_compiler.cpp', 'src/runtime/translation_index.cpp',
+    'src/service/android_manifest.cpp', 'src/service/apk_signature.cpp',
+    'src/service/native_alignment.cpp'
 ) | ForEach-Object { Join-Path $root $_ }
+$sources = @($testSources) + @($librarySources)
 Push-Location $out
 try {
     & $compiler.Source /nologo /std:c++17 /EHsc /utf-8 /W4 /WX /O2 "/I$root\src" @sources /Fe:bybus-host-smoke.exe

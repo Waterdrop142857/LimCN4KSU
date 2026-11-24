@@ -7,13 +7,19 @@
 //   * snapshot: manifest round-trip, path/digest rejection, marker rejection
 //   * shared: SHA-256 vectors; content passes through the merge unchanged
 #include <cstdint>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
 
+#include "runtime/flow_text_proof.h"
+#include "runtime/font_scale.h"
+#include "runtime/managed_state.h"
 #include "runtime/owned_code.h"
+#include "runtime/rich_text.h"
 #include "runtime/sigsegv_policy.h"
+#include "runtime/text_provenance.h"
 #include "runtime/translation_index.h"
 #include "shared/json.h"
 #include "shared/sha256.h"
@@ -23,15 +29,9 @@
 #include "translation/snapshot.h"
 #include "translation/text_policy.h"
 
+#include "harness.h"
+
 namespace {
-
-int g_failures = 0;
-
-void check(bool condition, const char *what) {
-    if (condition) return;
-    std::printf("FAIL %s\n", what);
-    ++g_failures;
-}
 
 std::string value_of(const bybus::shared::JsonPtr &root, const char *field) {
     if (!root) return std::string();
@@ -157,22 +157,61 @@ void test_ego_gift_abilities() {
 
 void test_long_skill_context() {
     using namespace bybus;
-    const std::string id(260, '7');
-    const std::string original = "[{\"id\":\"" + id +
+    // isSkillNumber(): 1..18 digits. A valid skill id pairs its level entries.
+    const std::string skill_id(15, '7');
+    const std::string skill_original = "[{\"id\":\"" + skill_id +
         "\",\"levelList\":[{\"level\":1,\"name\":\"old\"}]}]";
-    const std::string translated = "[{\"id\":\"" + id +
+    const std::string skill_translated = "[{\"id\":\"" + skill_id +
         "\",\"levelList\":[{\"level\":1,\"name\":\"new\"}]}]";
     translation::PairResult paired;
     std::string error;
-    check(translation::JsonPairer::pair("Localize/en/UI/Skills.json", original, translated,
-                                        &paired, &error),
-          "pair: long skill id parses");
+    check(translation::JsonPairer::pair("Localize/en/UI/Skills.json", skill_original,
+                                        skill_translated, &paired, &error),
+          "pair: valid skill id parses");
     bool kept_context = false;
     for (const translation::IndexRecord &record : paired.records) {
         if (record.translation == "new" &&
-            record.stable_id == "@skill:" + id + "/level:1") kept_context = true;
+            record.stable_id == "@skill:" + skill_id + "/level:1") kept_context = true;
     }
-    check(kept_context, "pair: long skill context is preserved");
+    check(kept_context, "pair: valid skill id keeps its context");
+
+    // 260 digits is not a skill number: no "@skill:" prefix, no "/level:" suffix,
+    // and the nested level row inherits no scope (Kotlin passes only skillContext
+    // down, so a rejected id leaves stableId null there).
+    const std::string long_id(260, '7');
+    const std::string long_original = "[{\"id\":\"" + long_id +
+        "\",\"levelList\":[{\"level\":1,\"name\":\"old\"}]}]";
+    const std::string long_translated = "[{\"id\":\"" + long_id +
+        "\",\"levelList\":[{\"level\":1,\"name\":\"new\"}]}]";
+    translation::PairResult long_paired;
+    std::string long_error;
+    check(translation::JsonPairer::pair("Localize/en/UI/Skills.json", long_original,
+                                        long_translated, &long_paired, &long_error),
+          "pair: over-long skill id parses");
+    bool walked_level = false;
+    bool unscoped_level = true;
+    for (const translation::IndexRecord &record : long_paired.records) {
+        if (record.translation != "new") continue;
+        walked_level = true;
+        if (!record.stable_id.empty()) unscoped_level = false;
+    }
+    check(walked_level && unscoped_level, "pair: over-long skill id is not a skill number");
+
+    // A leaf on that same row still degrades to tableIdentity(path, id) == id.
+    const std::string row_original = "[{\"id\":\"" + long_id +
+        "\",\"name\":\"rootOld\",\"levelList\":[{\"level\":1,\"name\":\"old\"}]}]";
+    const std::string row_translated = "[{\"id\":\"" + long_id +
+        "\",\"name\":\"rootNew\",\"levelList\":[{\"level\":1,\"name\":\"new\"}]}]";
+    translation::PairResult row_paired;
+    std::string row_error;
+    check(translation::JsonPairer::pair("Localize/en/UI/Skills.json", row_original,
+                                        row_translated, &row_paired, &row_error),
+          "pair: over-long skill row parses");
+    bool degraded_id = false;
+    for (const translation::IndexRecord &record : row_paired.records) {
+        if (record.translation == "rootNew" && record.stable_id == long_id) degraded_id = true;
+    }
+    check(degraded_id, "pair: over-long skill id falls back to the table identity");
 }
 
 void test_released_texts() {
@@ -301,13 +340,41 @@ void test_text_policy() {
     check(translation::is_string_array_field("successDesc"), "policy: successDesc is an array");
     translation::MergeResult merged;
     std::string error;
+    // isUsableDisplayText() rejects U+FFFD, so the edit is refused but the
+    // document still parses.
     check(translation::JsonPairer::merge("Localize/en/UI/EN_Test.json",
         R"([{"id":1,"name":"old"}])",
         R"([{"id":1,"name":"\uFFFD\n"}])", &merged, &error),
-        "policy: unusual display text is accepted");
-    check(merged.content.find("\\uFFFD") != std::string::npos ||
-          merged.content.find("\xEF\xBF\xBD") != std::string::npos,
-          "policy: replacement character survives merge");
+        "policy: replacement character still parses");
+    check(!merged.changed && merged.content.find("\\uFFFD") == std::string::npos &&
+              merged.content.find("\xEF\xBF\xBD") == std::string::npos,
+          "policy: replacement character blocks the edit");
+
+    // \n is one of the three C0 controls the policy keeps.
+    translation::MergeResult newline_merged;
+    std::string newline_error;
+    check(translation::JsonPairer::merge("Localize/en/UI/EN_Test.json",
+        R"([{"id":1,"name":"old"}])",
+        "[{\"id\":1,\"name\":\"a\\nb\"}]", &newline_merged, &newline_error),
+        "policy: newline-only translation parses");
+    check(newline_merged.changed &&
+              newline_merged.content.find("\"a\\nb\"") != std::string::npos,
+          "policy: newline-only text is still merged");
+
+    check(translation::is_blank(""), "policy: empty text is blank");
+    check(translation::is_blank(" \t\n"), "policy: ASCII whitespace is blank");
+    check(translation::is_blank(u8"\u3000"), "policy: ideographic space is blank");
+    check(translation::is_blank(u8"\u00A0"), "policy: no-break space is blank");
+    check(!translation::is_blank("a"), "policy: a letter is not blank");
+    check(!translation::is_blank(u8"\u200B"), "policy: zero width space is not blank");
+    check(!translation::is_usable_display_text(u8"\uFFFD"),
+          "policy: replacement character is not displayable");
+    check(!translation::is_usable_display_text("\x01"),
+          "policy: C0 control is not displayable");
+    check(!translation::is_usable_display_text("\x7F"),
+          "policy: DEL is not displayable");
+    check(translation::is_usable_display_text("a\nb"), "policy: newline is displayable");
+    check(translation::is_usable_display_text(u8"\u6c49"), "policy: CJK text is displayable");
 }
 
 void test_sha256_vectors() {
@@ -562,6 +629,7 @@ bybus::translation::AppSealingPlan sample_plan() {
     plan.stack.descriptor_stride = 24;
     plan.guards.push_back({0x700e4, 0xb942cbe0});
     plan.report_stable = true;
+    plan.exact_profile = bybus::translation::appsealing_exact_profile(plan);
     return plan;
 }
 
@@ -604,16 +672,50 @@ void test_appsealing_manifest() {
               decoded.profile.appsealing.stack.descriptor_stride == 24,
           "manifest: appsealing fields preserved");
     const std::string digest = translation::appsealing_digest(manifest.profile.appsealing);
+    const std::string exact = translation::appsealing_exact_profile(manifest.profile.appsealing);
+    check(exact.size() == 64, "manifest: exact profile is a sha256");
+
+    translation::SnapshotManifest exact_manifest = manifest;
+    exact_manifest.profile.appsealing.exact_profile = exact;
+    check(translation::parse_manifest(translation::serialize_manifest(exact_manifest), &decoded,
+                                      &error) &&
+              decoded.profile.appsealing.exact_profile == exact &&
+              translation::appsealing_exact_profile(decoded.profile.appsealing) == exact,
+          "manifest: exact profile round-trip and recomputation");
+    translation::SnapshotManifest bad_exact = exact_manifest;
+    bad_exact.profile.appsealing.exact_profile = "not-a-digest";
+    check(!translation::parse_manifest(translation::serialize_manifest(bad_exact), &decoded,
+                                       &error),
+          "manifest: malformed exact profile is rejected");
+    translation::SnapshotManifest empty_exact = exact_manifest;
+    empty_exact.profile.appsealing.exact_profile.clear();
+    check(!translation::parse_manifest(translation::serialize_manifest(empty_exact), &decoded,
+                                       &error),
+          "manifest: empty exact profile cannot disable verification");
+    translation::SnapshotManifest stale_exact = exact_manifest;
+    ++stale_exact.profile.appsealing.detach.entry_vaddr;
+    check(!translation::parse_manifest(translation::serialize_manifest(stale_exact), &decoded,
+                                       &error) &&
+              error == "manifest_appsealing_exact",
+          "manifest: structural change with stale exact profile is rejected");
+    translation::AppSealingPlan changed_plan = manifest.profile.appsealing;
+    ++changed_plan.detach.entry_vaddr;
+    check(translation::appsealing_exact_profile(changed_plan) != exact,
+          "manifest: exact profile tracks structural changes");
 
     translation::SnapshotManifest duplicate = manifest;
     duplicate.profile.appsealing.sites[1].vaddr =
         duplicate.profile.appsealing.sites[0].vaddr;
+    duplicate.profile.appsealing.exact_profile =
+        translation::appsealing_exact_profile(duplicate.profile.appsealing);
     check(!translation::parse_manifest(translation::serialize_manifest(duplicate), &decoded,
                                        &error),
           "manifest: overlapping appsealing sites are rejected");
 
     translation::SnapshotManifest bad_fingerprint = manifest;
     bad_fingerprint.profile.appsealing.ranges_fingerprint = "zz108bf95840fd56";
+    bad_fingerprint.profile.appsealing.exact_profile =
+        translation::appsealing_exact_profile(bad_fingerprint.profile.appsealing);
     check(!translation::parse_manifest(translation::serialize_manifest(bad_fingerprint),
                                        &decoded, &error),
           "manifest: bad appsealing fingerprint is rejected");
@@ -626,11 +728,15 @@ void test_appsealing_manifest() {
     transient.profile.appsealing.transient.branch_word = 0x1400003f;
     transient.profile.appsealing.transient.sigill_pc_vaddr = 0x10004;
     transient.profile.appsealing.transient.sigill_lr_vaddr = 0x10000;
+    transient.profile.appsealing.exact_profile =
+        translation::appsealing_exact_profile(transient.profile.appsealing);
     check(!translation::parse_manifest(translation::serialize_manifest(transient), &decoded,
                                        &error),
           "manifest: transient site must be registered without substitution");
 
     transient.profile.appsealing.sites[1].substitute = false;
+    transient.profile.appsealing.exact_profile =
+        translation::appsealing_exact_profile(transient.profile.appsealing);
     check(translation::parse_manifest(translation::serialize_manifest(transient), &decoded,
                                       &error),
           "manifest: transient site accepted when marked non-substitute");
@@ -640,33 +746,72 @@ void test_appsealing_manifest() {
     (void)digest;
 }
 
+void test_font_layout_helpers() {
+    using namespace bybus;
+    check(limbus_rich_text::visible_codepoints("<b>\xe6\xb1\x89</b>") == 1,
+          "rich text: tags do not count as visible glyphs");
+    check(limbus_rich_text::visible_codepoints("<noparse><b></noparse>") == 3,
+          "rich text: noparse keeps literal markup visible");
+
+    limbus_font_scale::Basis basis(34.f, 5.5f, 400.f, 700.f, 34.f);
+    limbus_font_scale::Style style;
+    style.face = 0.1f;
+    style.outline = 0.2f;
+    style.shadow_x = 0.5f;
+    const auto ratios = limbus_font_scale::calculate(basis, style, 5.5f);
+    check(std::isfinite(ratios.a) && std::isfinite(ratios.b) && std::isfinite(ratios.c) &&
+              ratios.a > 0 && ratios.b >= 0 && ratios.c >= 0,
+          "font scale: shader ratios stay finite");
+    check(!limbus_font_scale::Basis(0.f, 5.5f, 400.f, 700.f, 34.f).valid(),
+          "font scale: zero point size is rejected");
+
+    limbus_text_provenance::LayoutOverride<int32_t> layout;
+    layout.observe(2);
+    layout.record(1);
+    check(layout.restore(1), "layout override: records only values it wrote");
+    check(!layout.restore(2), "layout override: a later game write wins");
+
+    limbus_font_proof::FlowProof flow;
+    check(flow.assign("<b>\xe6\xb1\x89\xe8\xaf\x91</b>", true, false) &&
+              flow.matches("\xe6\xb1\x89"),
+          "flow proof: verified complete input authorizes its visible prefix");
+    check(!flow.assign("Hello", false, false), "flow proof: unverified input is rejected");
+
+    limbus_managed::RecentOutputs outputs;
+    outputs.add("\xe6\xb1\x89\xe8\xaf\x91");
+    check(outputs.contains("\xe6\xb1\x89\xe8\xaf\x91"), "provenance: recent output is found");
+    for (int i = 0; i < 4100; ++i) outputs.add("entry-" + std::to_string(i));
+    check(!outputs.contains("\xe6\xb1\x89\xe8\xaf\x91"),
+          "provenance: ledger eviction is bounded");
+}
+
 } // namespace
 
-int main() {
-    test_merge_basic();
-    test_merge_unchanged_reports_null();
-    test_unknown_fields_preserved();
-    test_duplicate_identity_by_metadata();
-    test_string_array_field();
-    test_ego_gift_abilities();
-    test_long_skill_context();
-    test_released_texts();
-    test_snapshot_marker_rejected();
-    test_manifest_validation();
-    test_large_json_input();
-    test_text_policy();
-    test_sha256_vectors();
-    test_json_number_identity();
-    test_appsealing_helpers();
-    test_owned_code_ledger();
-    test_translation_index_roundtrip();
-    test_sigsegv_policy();
-    test_appsealing_manifest();
-    if (g_failures != 0) {
-        std::printf("%d check(s) failed\n", g_failures);
-        return 1;
-    }
-    std::printf("all host checks passed\n");
-    return 0;
-}
+// Registered with tests/harness.h so every tests/*.cpp file can add cases
+// without touching this one.
+#define BYBUS_REGISTER(function_name)                                          \
+    static ::bybus_test::Registrar function_name##_registration(               \
+        #function_name, &function_name)
+
+BYBUS_REGISTER(test_merge_basic);
+BYBUS_REGISTER(test_merge_unchanged_reports_null);
+BYBUS_REGISTER(test_unknown_fields_preserved);
+BYBUS_REGISTER(test_duplicate_identity_by_metadata);
+BYBUS_REGISTER(test_string_array_field);
+BYBUS_REGISTER(test_ego_gift_abilities);
+BYBUS_REGISTER(test_long_skill_context);
+BYBUS_REGISTER(test_released_texts);
+BYBUS_REGISTER(test_snapshot_marker_rejected);
+BYBUS_REGISTER(test_manifest_validation);
+BYBUS_REGISTER(test_large_json_input);
+BYBUS_REGISTER(test_text_policy);
+BYBUS_REGISTER(test_sha256_vectors);
+BYBUS_REGISTER(test_json_number_identity);
+BYBUS_REGISTER(test_appsealing_helpers);
+BYBUS_REGISTER(test_owned_code_ledger);
+BYBUS_REGISTER(test_translation_index_roundtrip);
+BYBUS_REGISTER(test_sigsegv_policy);
+BYBUS_REGISTER(test_appsealing_manifest);
+BYBUS_REGISTER(test_font_layout_helpers);
+
 

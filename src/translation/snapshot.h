@@ -176,6 +176,12 @@ std::string serialize_manifest(const SnapshotManifest &manifest);
 // Stable digest of one compatibility plan, used by the generation identity.
 std::string appsealing_digest(const AppSealingPlan &plan);
 
+// Exact-profile digest: the plan's structural fields with the exactProfile
+// member cleared. A runtime recomputes it before installing any patch, so a
+// manifest whose plan fields were mixed or modified cannot be accepted even
+// when the overall generation digest still verifies.
+std::string appsealing_exact_profile(const AppSealingPlan &plan);
+
 // Strict: schema, digests, resource names, table paths and byte counts.
 bool parse_manifest(const std::string &text, SnapshotManifest *out, std::string *error);
 

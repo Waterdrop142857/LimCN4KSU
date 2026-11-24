@@ -536,6 +536,7 @@ bool build_appsealing_plan(const std::string &protection, const std::string &il2
     if (!qualify_protection(protection, version_code, &compiled, error)) return false;
     if (!qualify_game(il2cpp, &compiled, error)) return false;
     compiled.present = true;
+    compiled.exact_profile = appsealing_exact_profile(compiled);
     *plan = std::move(compiled);
     error->clear();
     return true;

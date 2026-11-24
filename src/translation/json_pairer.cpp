@@ -23,15 +23,9 @@ const char *const kIdFields[] = {"id", "key", "level", "index", "idx", "original
 const char *const kStableMetadataFields[] = {"model", "voicefile"};
 const char *const kSkillChildFields[] = {"levellist", "coinlist", "coindescs"};
 
-bool is_blank(const std::string &text) {
-    for (const char c : text) {
-        if (c != ' ' && c != '\t' && c != '\n' && c != '\r') return false;
-    }
-    return true;
-}
-
+// TranslationJsonPairer.kt:361 `length in 1..18 && all { it in '0'..'9' }`.
 bool is_skill_number(const std::string &text) {
-    if (text.empty()) return false;
+    if (text.empty() || text.size() > 18) return false;
     for (const char c : text) {
         if (c < '0' || c > '9') return false;
     }
@@ -47,8 +41,10 @@ bool is_ascii_alnum(char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
 }
 
+// TranslationJsonPairer.kt:147 / :154: the identifier is 1..96 characters wide
+// before it may become a scope key.
 bool is_scope_identifier(const std::string &text, bool allow_dot) {
-    if (text.empty()) return false;
+    if (text.empty() || text.size() > 96) return false;
     for (const char c : text) {
         const bool extra = c == '-' || c == '_' || (allow_dot && c == '.');
         if (!is_ascii_alnum(c) && !extra) return false;
@@ -199,7 +195,8 @@ int count_fields(const JsonPtr &value, int depth, const std::string *display_arr
             const JsonPtr child = member.second;
             // The scope must follow the field being inspected, exactly like the
             // Kotlin recursion that passes `field.takeIf { it in STRING_ARRAY_FIELDS }`.
-            if (child && child->is_string() && is_display_field(member.first)) {
+            if (child && child->is_string() && !is_blank(child->as_string()) &&
+                is_display_field(member.first)) {
                 ++total;
                 continue;
             }
@@ -221,7 +218,7 @@ int count_fields(const JsonPtr &value, int depth, const std::string *display_arr
         return total;
     }
     if (value->is_string()) {
-        return display_array != nullptr ? 1 : 0;
+        return display_array != nullptr && !is_blank(value->as_string()) ? 1 : 0;
     }
     return 0;
 }
@@ -383,8 +380,13 @@ bool Collector::collect_object(const JsonPtr &original, const JsonPtr &translate
             }
             continue;
         }
+        // Kotlin: a display leaf needs both sides non-blank and free of encoding
+        // damage; otherwise the field is skipped and the next branch is tried.
+        // A string source never reaches that branch, so `continue` is equivalent.
         if (source && target && source->is_string() && target->is_string() &&
-            is_display_field(field)) {
+            !is_blank(source->as_string()) && !is_blank(target->as_string()) &&
+            is_display_field(field) && is_usable_display_text(source->as_string()) &&
+            is_usable_display_text(target->as_string())) {
             IndexRecord record;
             record.path = path_;
             record.context = object_context;
@@ -425,6 +427,14 @@ bool Collector::collect_array(const JsonPtr &original, const JsonPtr &translated
         for (size_t index = 0; index < original->length(); ++index) {
             const JsonPtr source = original->at(index);
             const JsonPtr target = translated->at(index);
+            // TranslationJsonPairer.kt:198-200: an unusable entry keeps the
+            // original string and contributes no record, never a whole-array
+            // rejection.
+            if (is_blank(source->as_string()) || is_blank(target->as_string()) ||
+                !is_usable_display_text(source->as_string()) ||
+                !is_usable_display_text(target->as_string())) {
+                continue;
+            }
             IndexRecord record;
             record.path = path_;
             record.context = context + "[" + std::to_string(index) + "]";
@@ -714,7 +724,8 @@ bool collect_released(const JsonPtr &value, int depth, const std::string *displa
         for (const auto &member : value->members()) {
             const JsonPtr child = member.second;
             if (child && child->is_string()) {
-                if (is_display_field(member.first)) {
+                if (is_display_field(member.first) && !is_blank(child->as_string()) &&
+                    is_usable_display_text(child->as_string())) {
                     texts->push_back(child->as_string());
                 }
                 continue;
@@ -731,10 +742,98 @@ bool collect_released(const JsonPtr &value, int depth, const std::string *displa
         }
         return true;
     }
-    if (value->is_string() && display_array != nullptr) {
+    if (value->is_string() && display_array != nullptr && !is_blank(value->as_string()) &&
+        is_usable_display_text(value->as_string())) {
         texts->push_back(value->as_string());
     }
     return true;
+}
+
+// TranslationSnapshot.kt:54 compares numbers as decimals
+// (`a.toString().toBigDecimal().compareTo(b.toString().toBigDecimal())`), so 1
+// and 1.0 bind while two integers past 2^53 stay distinct. A double cannot
+// express that difference, so the comparison never goes through as_double().
+struct DecimalValue {
+    bool negative = false;
+    bool zero = true;
+    std::string digits;      // significant digits: no leading or trailing zero
+    int64_t exponent = 0;    // value = digits * 10^exponent
+};
+
+// Parses optional sign, integer part, optional fraction and optional `e/E±n`.
+// Returns false for anything that is not that shape (e.g. Java's "NaN").
+bool parse_decimal_text(const std::string &text, DecimalValue *out) {
+    size_t position = 0;
+    bool negative = false;
+    if (position < text.size() && (text[position] == '+' || text[position] == '-')) {
+        negative = text[position] == '-';
+        ++position;
+    }
+    std::string integer_digits;
+    while (position < text.size() && text[position] >= '0' && text[position] <= '9') {
+        integer_digits.push_back(text[position]);
+        ++position;
+    }
+    std::string fraction_digits;
+    if (position < text.size() && text[position] == '.') {
+        ++position;
+        while (position < text.size() && text[position] >= '0' && text[position] <= '9') {
+            fraction_digits.push_back(text[position]);
+            ++position;
+        }
+    }
+    if (integer_digits.empty() && fraction_digits.empty()) return false;
+    int64_t exponent = 0;
+    if (position < text.size() && (text[position] == 'e' || text[position] == 'E')) {
+        ++position;
+        bool exponent_negative = false;
+        if (position < text.size() && (text[position] == '+' || text[position] == '-')) {
+            exponent_negative = text[position] == '-';
+            ++position;
+        }
+        const size_t start = position;
+        int64_t magnitude = 0;
+        while (position < text.size() && text[position] >= '0' && text[position] <= '9') {
+            if (magnitude < 1000000000) magnitude = magnitude * 10 + (text[position] - '0');
+            ++position;
+        }
+        if (position == start) return false;
+        exponent = exponent_negative ? -magnitude : magnitude;
+    }
+    if (position != text.size()) return false;
+    std::string digits = integer_digits + fraction_digits;
+    exponent -= static_cast<int64_t>(fraction_digits.size());
+    const size_t first = digits.find_first_not_of('0');
+    if (first == std::string::npos) {
+        *out = DecimalValue();
+        return true;
+    }
+    digits.erase(0, first);
+    while (!digits.empty() && digits.back() == '0') {
+        digits.pop_back();
+        ++exponent;
+    }
+    out->negative = negative;
+    out->zero = false;
+    out->digits = std::move(digits);
+    out->exponent = exponent;
+    return true;
+}
+
+bool same_decimal(const DecimalValue &left, const DecimalValue &right) {
+    if (left.zero || right.zero) return left.zero && right.zero;
+    return left.negative == right.negative && left.digits == right.digits &&
+           left.exponent == right.exponent;
+}
+
+bool same_number(const Json &left, const Json &right) {
+    // Both sides integral already carry an exact value.
+    if (left.is_integral() && right.is_integral()) return left.as_int() == right.as_int();
+    DecimalValue left_value;
+    DecimalValue right_value;
+    if (!parse_decimal_text(left.dump(), &left_value)) return false;
+    if (!parse_decimal_text(right.dump(), &right_value)) return false;
+    return same_decimal(left_value, right_value);
 }
 
 bool parse_document(const std::string &text, JsonPtr *out, std::string *error) {
@@ -810,9 +909,14 @@ bool encode_snapshot(const std::string &original_text, const JsonPtr &document, 
 
 namespace {
 
+// TranslationSnapshot.kt:36 `if (depth > 64 || ++count > 1000000) return false`:
+// the binding walk is bounded so a pathological document cannot run away.
+constexpr size_t kMatchingStructureLimit = 1000000;
+
 bool matching_structure_impl(const JsonPtr &original, const JsonPtr &translated, int depth,
-                             bool string_array, SnapshotBinding *pairs) {
+                             bool string_array, SnapshotBinding *pairs, size_t *visited) {
     if (depth > kMaxDepth) return false;
+    if (++*visited > kMatchingStructureLimit) return false;
     if (!original || !translated) return false;
     if (original->is_object() && translated->is_object()) {
         for (const auto &member : translated->members()) {
@@ -830,7 +934,7 @@ bool matching_structure_impl(const JsonPtr &original, const JsonPtr &translated,
             }
             if (!translated->has(member.first)) return false;
             if (!matching_structure_impl(child, translated->opt(member.first), depth + 1,
-                                         is_string_array_field(member.first), pairs)) {
+                                         is_string_array_field(member.first), pairs, visited)) {
                 return false;
             }
         }
@@ -846,13 +950,13 @@ bool matching_structure_impl(const JsonPtr &original, const JsonPtr &translated,
                 if (!right || !right->is_string()) return false;
                 continue;
             }
-            if (!matching_structure_impl(left, right, depth + 1, false, pairs)) return false;
+            if (!matching_structure_impl(left, right, depth + 1, false, pairs, visited)) return false;
         }
         return true;
     }
     if (original->is_number() && translated->is_number()) {
         // Decimal comparison so 1 and 1.0 bind, unlike equivalent().
-        return original->as_double() == translated->as_double();
+        return same_number(*original, *translated);
     }
     if (original->is_string() && translated->is_string()) {
         return original->as_string() == translated->as_string();
@@ -867,7 +971,8 @@ bool bind_snapshot(const std::string &original_text, const JsonPtr &original,
     out->clear();
     if (decoded.source_hash.empty()) return false;
     if (decoded.source_hash != shared::Sha256::hex(original_text)) return false;
-    return matching_structure_impl(original, decoded.document, 0, false, out);
+    size_t visited = 0;
+    return matching_structure_impl(original, decoded.document, 0, false, out, &visited);
 }
 
 std::string JsonPairer::source_table_name(const std::string &path) { return table_name(path); }

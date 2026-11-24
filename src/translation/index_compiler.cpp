@@ -260,19 +260,47 @@ std::string context_key(const std::string &id, const std::string &field,
     return id + '\x1f' + field + '\x1f' + source;
 }
 
+// TranslationIndexCompiler.kt:379 STORY_CONTEXT, matched against the whole id:
+// ^(@story:[A-Za-z0-9_-]{1,96})(?:/dialog:([0-9]{1,18}))?$
+bool is_story_char(char c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+           c == '_' || c == '-';
+}
+
+bool parse_story_id(const std::string &id, std::string *scene, std::string *dialog) {
+    constexpr size_t kPrefixLength = 7; // "@story:"
+    constexpr size_t kDialogLength = 8; // "/dialog:"
+    if (id.size() <= kPrefixLength || id.compare(0, kPrefixLength, "@story:") != 0) return false;
+    size_t at = kPrefixLength;
+    const size_t scene_at = at;
+    while (at < id.size() && is_story_char(id[at])) ++at;
+    if (at - scene_at < 1 || at - scene_at > 96) return false;
+    scene->assign(id, scene_at, at - scene_at);
+    dialog->clear();
+    if (at == id.size()) return true;
+    if (id.compare(at, kDialogLength, "/dialog:") != 0) return false;
+    at += kDialogLength;
+    const size_t digits_at = at;
+    while (at < id.size() && id[at] >= '0' && id[at] <= '9') ++at;
+    if (at - digits_at < 1 || at - digits_at > 18 || at != id.size()) return false;
+    dialog->assign(id, digits_at, at - digits_at);
+    return true;
+}
+
 std::vector<std::string> record_ids(const IndexRecord &record) {
     std::vector<std::string> ids;
+    auto append_distinct = [&ids](const std::string &id) {
+        if (id.empty()) return;
+        if (std::find(ids.begin(), ids.end(), id) != ids.end()) return;
+        ids.push_back(id);
+    };
     if (!record.stable_id.empty()) ids.push_back(record.stable_id);
-    if (record.stable_id.rfind("@story:", 0) == 0) {
-        const size_t dialog = record.stable_id.find("/dialog:");
-        if (dialog != std::string::npos) {
-            ids.push_back(record.stable_id.substr(0, dialog));
-            const std::string id = record.stable_id.substr(dialog + 8);
-            if (!id.empty()) ids.push_back(id);
-        }
+    std::string scene;
+    std::string dialog;
+    if (parse_story_id(record.stable_id, &scene, &dialog)) {
+        append_distinct(scene);
+        append_distinct(dialog);
     }
-    std::sort(ids.begin(), ids.end());
-    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
     return ids;
 }
 
@@ -283,17 +311,42 @@ void append_u32(std::string *out, uint32_t value) {
     out->push_back(static_cast<char>(value));
 }
 
-void append_map(std::string *out, const std::map<std::string, std::string> &entries) {
-    append_u32(out, static_cast<uint32_t>(entries.size()));
-    for (const auto &entry : entries) {
-        append_u32(out, static_cast<uint32_t>(entry.first.size()));
-        out->append(entry.first);
-        append_u32(out, static_cast<uint32_t>(entry.second.size()));
-        out->append(entry.second);
+// Writes one map's pairs in linked-map order and returns how many were written.
+// The caller keeps the leading count so the schema-9 header stays consistent with
+// the bytes even if an order vector was left stale by a hand-built index.
+uint32_t append_pairs(std::string *out, const std::map<std::string, std::string> &entries,
+                      const std::vector<std::string> &order) {
+    std::set<std::string> written;
+    uint32_t count = 0;
+    auto append = [out, &count](const std::string &key, const std::string &value) {
+        append_u32(out, static_cast<uint32_t>(key.size()));
+        out->append(key);
+        append_u32(out, static_cast<uint32_t>(value.size()));
+        out->append(value);
+        ++count;
+    };
+    for (const std::string &key : order) {
+        const auto found = entries.find(key);
+        if (found == entries.end() || !written.insert(key).second) continue;
+        append(found->first, found->second);
     }
+    // Keys missing from the order vector are still content: append them last so
+    // nothing is dropped and the count never disagrees with the payload.
+    for (const auto &entry : entries) {
+        if (!written.insert(entry.first).second) continue;
+        append(entry.first, entry.second);
+    }
+    return count;
 }
 
 } // namespace
+
+void put_ordered(std::map<std::string, std::string> *entries, std::vector<std::string> *order,
+                 const std::string &key, const std::string &value) {
+    if (!entries || !order) return;
+    if (entries->find(key) == entries->end()) order->push_back(key);
+    (*entries)[key] = value;
+}
 
 CompiledTranslationIndex compile_translation_index(
     const std::vector<IndexRecord> &records, const std::string &version,
@@ -302,8 +355,11 @@ CompiledTranslationIndex compile_translation_index(
     std::vector<const IndexRecord *> usable;
     usable.reserve(records.size());
     for (const IndexRecord &record : records) {
-        if (!is_display_field(record.field) || trim(record.source).empty() ||
-            trim(record.translation).empty()) {
+        // TranslationIndexCompiler.kt:94-103 rejects blank or encoding-damaged
+        // display pairs before they can reach any of the three maps.
+        if (!is_display_field(record.field) || is_blank(record.source) ||
+            is_blank(record.translation) || !is_usable_display_text(record.source) ||
+            !is_usable_display_text(record.translation)) {
             continue;
         }
         usable.push_back(&record);
@@ -312,16 +368,18 @@ CompiledTranslationIndex compile_translation_index(
         if (left->source != right->source) return left->source < right->source;
         if (left->translation != right->translation) return left->translation < right->translation;
         if (left->path != right->path) return left->path < right->path;
-        if (left->stable_id != right->stable_id) return left->stable_id < right->stable_id;
-        return left->field < right->field;
+        if (left->context != right->context) return left->context < right->context;
+        if (left->field != right->field) return left->field < right->field;
+        return left->stable_id < right->stable_id;
     });
     usable.erase(std::unique(usable.begin(), usable.end(),
                              [](const IndexRecord *left, const IndexRecord *right) {
                                  return left->source == right->source &&
                                         left->translation == right->translation &&
                                         left->path == right->path &&
-                                        left->stable_id == right->stable_id &&
-                                        left->field == right->field;
+                                        left->context == right->context &&
+                                        left->field == right->field &&
+                                        left->stable_id == right->stable_id;
                              }),
                  usable.end());
 
@@ -355,7 +413,7 @@ CompiledTranslationIndex compile_translation_index(
         const bool identity_rule = translations.size() > 1 || is_han_label(source);
         if (!resolved.empty() && !is_numeric_literal(source) &&
             (resolved != source || identity_rule)) {
-            result.unique_entries[source] = resolved;
+            put_ordered(&result.unique_entries, &result.unique_order, source, resolved);
             if (translations.size() > 1 && !unchanged) ++result.dominant_entry_count;
         } else if (resolved.empty()) {
             ++result.conflict_count;
@@ -443,8 +501,10 @@ CompiledTranslationIndex compile_translation_index(
         }
         const std::string resolved = resolve_translation(counts);
         if (resolved.empty()) continue;
-        result.term_entries[group.first] = resolved;
-        if (highest == 3) result.unique_entries[group.first] = resolved;
+        put_ordered(&result.term_entries, &result.term_order, group.first, resolved);
+        if (highest == 3) {
+            put_ordered(&result.unique_entries, &result.unique_order, group.first, resolved);
+        }
     }
 
     begin = 0;
@@ -478,7 +538,10 @@ CompiledTranslationIndex compile_translation_index(
                 } else if (values.find(source) != values.end()) {
                     chosen = source;
                 }
-                if (!chosen.empty()) result.contextual_entries[target.first] = chosen;
+                if (!chosen.empty()) {
+                    put_ordered(&result.contextual_entries, &result.contextual_order, target.first,
+                                chosen);
+                }
             }
         }
         begin = end;
@@ -496,9 +559,11 @@ CompiledTranslationIndex compile_translation_index(
         digest.update(reinterpret_cast<const uint8_t *>(value.data()), value.size());
     };
     update(kRevision);
+    // TranslationIndexCompiler.kt:244 digests path, id, field, source, translation,
+    // stableId in that order (IndexRecord::context carries the reference `id`).
     for (const IndexRecord *record : usable) {
         update(record->path);
-        update(record->stable_id);
+        update(record->context);
         update(record->field);
         update(record->source);
         update(record->translation);
@@ -538,12 +603,21 @@ bool write_translation_index(const CompiledTranslationIndex &index, std::string 
         !check(index.contextual_entries)) {
         return false;
     }
+    // TranslationIndexCompiler.kt:538-556 writes magic, schema and the three
+    // counts first, then one payload per group; there is no per-group count.
+    std::string payload;
+    const uint32_t unique_count = append_pairs(&payload, index.unique_entries, index.unique_order);
+    const uint32_t term_count = append_pairs(&payload, index.term_entries, index.term_order);
+    const uint32_t contextual_count =
+        append_pairs(&payload, index.contextual_entries, index.contextual_order);
     std::string bytes;
+    bytes.reserve(sizeof(kMagic) + 4 * 4 + payload.size());
     bytes.append(reinterpret_cast<const char *>(kMagic), sizeof(kMagic));
     append_u32(&bytes, kIndexSchema);
-    append_map(&bytes, index.unique_entries);
-    append_map(&bytes, index.term_entries);
-    append_map(&bytes, index.contextual_entries);
+    append_u32(&bytes, unique_count);
+    append_u32(&bytes, term_count);
+    append_u32(&bytes, contextual_count);
+    bytes.append(payload);
     if (bytes.size() > kMaxIndexBytes) {
         *error = "index_size";
         return false;

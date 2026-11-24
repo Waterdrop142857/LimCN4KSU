@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "shared/fs.h"
@@ -169,6 +170,10 @@ BuildOutcome build_generation(const BuildInputs &inputs) {
     BuildOutcome outcome;
     std::unordered_map<std::string, std::string> written;  // digest -> file name
     std::vector<IndexRecord> index_records;
+    // ContainerPatchInstaller.kt:236-238: a source file counts as available once
+    // its pairing covers 90% of the display fields. The key is the canonical
+    // GameTable resource name, the same identity the import side uses.
+    std::unordered_set<std::string> paired_resources;
     for (const GameTable &original : inputs.originals) {
         if (!valid_resource_name(original.resource)) {
             ++outcome.skipped;
@@ -188,6 +193,7 @@ BuildOutcome build_generation(const BuildInputs &inputs) {
             ++outcome.skipped;
             continue;
         }
+        if (merged.sufficiently_paired()) paired_resources.insert(original.resource);
         outcome.matched_fields += static_cast<uint32_t>(merged.matched_fields);
         outcome.source_fields += static_cast<uint32_t>(merged.source_fields);
         index_records.insert(index_records.end(), merged.records.begin(), merged.records.end());
@@ -238,12 +244,16 @@ BuildOutcome build_generation(const BuildInputs &inputs) {
         manifest.font_sha256 = shared::Sha256::hex(font);
     }
 
-    {
+    // ContainerPatchInstaller.kt:258 / :430: 90% of the packed resources must
+    // pair before the index is trusted, and an empty pack is never a pass.
+    const int64_t packed_count = static_cast<int64_t>(inputs.pack.size());
+    const int64_t available_count = static_cast<int64_t>(paired_resources.size());
+    const bool resources_ready = packed_count > 0 && available_count * 100 >= packed_count * 90;
+    if (resources_ready) {
         const CompiledTranslationIndex compiled = compile_translation_index(
             index_records, inputs.source_id + ":" + std::to_string(inputs.game_version_code),
-            inputs.archive_sha256,
-            static_cast<uint32_t>(inputs.pack.size()),
-            static_cast<uint32_t>(manifest.entries.size()));
+            inputs.archive_sha256, static_cast<uint32_t>(inputs.pack.size()),
+            static_cast<uint32_t>(paired_resources.size()));
         std::string index_bytes;
         std::string index_error;
         if (!write_translation_index(compiled, &index_bytes, &index_error)) {
@@ -264,6 +274,10 @@ BuildOutcome build_generation(const BuildInputs &inputs) {
         manifest.index.unique = static_cast<uint32_t>(compiled.unique_entries.size());
         manifest.index.terms = static_cast<uint32_t>(compiled.term_entries.size());
         manifest.index.contextual = static_cast<uint32_t>(compiled.contextual_entries.size());
+    } else {
+        // Too few source tables paired: publish the snapshot without a runtime
+        // index instead of activating a thin one.
+        outcome.detail = "insufficient_pairs";
     }
 
     manifest.generation = shared::Sha256::hex(canonical_inputs(inputs, manifest));
@@ -274,7 +288,8 @@ BuildOutcome build_generation(const BuildInputs &inputs) {
         return failure(wrote_manifest, "build_write_manifest");
     }
     if (shared::sync_dir(inputs.work_dir) != shared::Code::Ok ||
-        shared::sync_dir(inputs.work_dir + "/index") != shared::Code::Ok ||
+        (manifest.index.present &&
+         shared::sync_dir(inputs.work_dir + "/index") != shared::Code::Ok) ||
         shared::sync_dir(table_dir) != shared::Code::Ok) {
         return failure(shared::Code::IoError, "build_sync");
     }

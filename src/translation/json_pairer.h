@@ -23,15 +23,20 @@ struct IndexRecord {
     std::string stable_id;
 };
 
+// ContainerPatchInstaller.kt:225-258 pairing quality. Kotlin:
+// `sourceFields == 0 || matchedFields * 100L >= sourceFields * 90L`.
+inline bool sufficiently_paired(int source_fields, int matched_fields) {
+    return source_fields == 0 ||
+           static_cast<int64_t>(matched_fields) * 100 >= static_cast<int64_t>(source_fields) * 90;
+}
+
 struct PairResult {
     std::vector<IndexRecord> records;
     int source_fields = 0;
     int matched_fields = 0;
 
-    // Kotlin: sourceFields == 0 || matchedFields * 100 >= sourceFields * 90
     bool sufficiently_paired() const {
-        return source_fields == 0 ||
-               static_cast<int64_t>(matched_fields) * 100 >= static_cast<int64_t>(source_fields) * 90;
+        return ::bybus::translation::sufficiently_paired(source_fields, matched_fields);
     }
 };
 
@@ -43,6 +48,10 @@ struct MergeResult {
     // Populated by merge() for the translation index compiler. Empty when the
     // caller uses pair() only.
     std::vector<IndexRecord> records;
+
+    bool sufficiently_paired() const {
+        return ::bybus::translation::sufficiently_paired(source_fields, matched_fields);
+    }
 };
 
 // Identity map original node -> translated node, mirroring IdentityHashMap.

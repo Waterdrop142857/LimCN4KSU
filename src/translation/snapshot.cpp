@@ -262,8 +262,11 @@ bool parse_appsealing(const shared::JsonPtr &root, AppSealingPlan *out, std::str
         *error = "manifest_appsealing_managed";
         return false;
     }
+    // 与 runtime `owned_code` 的 256 条预算一致（`ranges_crc` 对 256 条以上 fail-closed）；
+    // 超限的清单在构建期即拒绝，避免运行期 fail-closed。
+    // Keep the 256 in sync with src/runtime/owned_code.h.
     if (!uint_field(root, "rangesVaddr", kMaxModuleBytes, &plan.ranges_vaddr) ||
-        !uint32_field(root, "rangesCount", 512, &plan.ranges_count) || plan.ranges_count == 0) {
+        !uint32_field(root, "rangesCount", 256, &plan.ranges_count) || plan.ranges_count == 0) {
         *error = "manifest_appsealing_ranges";
         return false;
     }
@@ -477,11 +480,11 @@ bool parse_appsealing(const shared::JsonPtr &root, AppSealingPlan *out, std::str
         }
     }
     const shared::JsonPtr exact = root->opt("exactProfile");
-    if (exact && (!exact->is_string() || exact->as_string().size() > 64)) {
+    if (!exact || !exact->is_string() || !shared::is_sha256_hex(exact->as_string())) {
         *error = "manifest_appsealing_exact";
         return false;
     }
-    if (exact) plan.exact_profile = exact->as_string();
+    plan.exact_profile = exact->as_string();
     const shared::JsonPtr stable = root->opt("reportStable");
     plan.report_stable = plan.report.present;
     if (stable && stable->is_bool()) plan.report_stable = stable->as_bool();
@@ -505,6 +508,13 @@ bool parse_appsealing(const shared::JsonPtr &root, AppSealingPlan *out, std::str
     }
 
     plan.present = true;
+    // The exact profile must match the fields in this same object, not merely
+    // have the right shape. Empty/missing values are rejected: otherwise a
+    // manifest could disable the whole check by writing "".
+    if (appsealing_exact_profile(plan) != plan.exact_profile) {
+        *error = "manifest_appsealing_exact";
+        return false;
+    }
     *out = std::move(plan);
     return true;
 }
@@ -564,7 +574,19 @@ std::string serialize_manifest(const SnapshotManifest &manifest) {
 
 std::string appsealing_digest(const AppSealingPlan &plan) {
     if (!plan.present) return std::string("none");
-    return shared::Sha256::hex(serialize_appsealing(plan)->dump());
+    // exactProfile is derived from the structural fields. Exclude it from the
+    // generation identity so a build that merely starts writing/refreshing the
+    // derived field does not churn every existing generation.
+    AppSealingPlan normalized = plan;
+    normalized.exact_profile.clear();
+    return shared::Sha256::hex(serialize_appsealing(normalized)->dump());
+}
+
+std::string appsealing_exact_profile(const AppSealingPlan &plan) {
+    if (!plan.present) return std::string("none");
+    AppSealingPlan normalized = plan;
+    normalized.exact_profile.clear();
+    return shared::Sha256::hex(serialize_appsealing(normalized)->dump());
 }
 
 bool parse_manifest(const std::string &text, SnapshotManifest *out, std::string *error) {
