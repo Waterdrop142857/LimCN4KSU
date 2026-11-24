@@ -347,4 +347,40 @@ bool verify_managed_section(uintptr_t module_base, const IntegrityProfile &profi
     return checked && value == profile.managed_crc;
 }
 
+bool verify_owned_sections(uintptr_t module_base, const IntegrityProfile &profile,
+                           PatchLedger *ledger, uint32_t *text_crc, uint32_t *managed_crc,
+                           size_t *owned) {
+    if (text_crc) *text_crc = 0;
+    if (managed_crc) *managed_crc = 0;
+    if (owned) *owned = 0;
+    if (!ledger || !profile.present || module_base == 0 || profile.text_size == 0 ||
+        profile.managed_size == 0 || profile.managed_vaddr == 0) {
+        return false;
+    }
+    uintptr_t text_start = 0;
+    if (!resolve_region(module_base, profile.text_vaddr, profile.text_offset, profile.text_size,
+                        &text_start)) {
+        return false;
+    }
+    if (!mapped_range(module_base, profile.managed_vaddr, profile.managed_size, PF_R | PF_X)) {
+        return false;
+    }
+    // The reference accounts both sections through one `owned` accumulator, so
+    // a patch counted in either section is counted exactly once in the total.
+    uint32_t text_value = 0;
+    uint32_t managed_value = 0;
+    size_t text_owned = 0;
+    size_t managed_owned = 0;
+    const bool text_ok = ledger->section_crc_checked(module_base, text_start - module_base,
+                                                     profile.text_size, &text_value, &text_owned);
+    const bool managed_ok = ledger->section_crc_checked(
+        module_base, profile.managed_vaddr, profile.managed_size, &managed_value, &managed_owned);
+    if (text_crc) *text_crc = text_value;
+    if (managed_crc) *managed_crc = managed_value;
+    const size_t accounted = text_owned + managed_owned;
+    if (owned) *owned = accounted;
+    return text_ok && managed_ok && accounted == ledger->substitute_count(module_base) &&
+           text_value == profile.text_crc && managed_value == profile.managed_crc;
+}
+
 } // namespace bybus::runtime

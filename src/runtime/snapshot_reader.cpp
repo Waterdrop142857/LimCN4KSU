@@ -81,6 +81,10 @@ std::string SnapshotReader::normalize_resource_key(const std::string &raw) {
 }
 
 bool SnapshotReader::open(CompanionClient *client, const HelloInfo &hello, std::string *error) {
+    // A new generation invalidates every derived table, exactly like the
+    // reference runtime clearing its index-derived caches before the swap. Doing
+    // it first also covers a failed open: the next successful open starts cold.
+    reset_cache();
     client_ = client;
     generation_ = hello.generation;
     if (!client_ || !shared::is_sha256_hex(generation_)) {
@@ -150,6 +154,11 @@ bool SnapshotReader::open(CompanionClient *client, const HelloInfo &hello, std::
     return true;
 }
 
+void SnapshotReader::reset_cache() {
+    cache_.clear();
+    cache_bytes_ = 0;
+}
+
 bool SnapshotReader::read_verified_table(const std::string &relative_path,
                                          const std::string &digest, uint64_t expected_bytes,
                                          std::string *content) {
@@ -171,16 +180,16 @@ bool SnapshotReader::read_verified_table(const std::string &relative_path,
 void SnapshotReader::prewarm_tables() {
     size_t ready = 0;
     size_t failed = 0;
+    // Warm through load_table so prewarmed bytes travel the same verified path
+    // (digest check on the way in, key check on every later hit) as on-demand
+    // reads. There is no second, unchecked tier any more.
     for (const translation::SnapshotEntry &entry : entries_) {
-        if (prewarmed_.find(entry.merged_path) != prewarmed_.end()) continue;
         try {
             std::string content;
-            if (!read_verified_table(entry.merged_path, entry.merged_sha256,
-                                     entry.merged_bytes, &content)) {
+            if (!load_table(entry.merged_path, entry.merged_sha256, entry.merged_bytes, &content)) {
                 ++failed;
                 continue;
             }
-            prewarmed_.emplace(entry.merged_path, std::move(content));
             ++ready;
         } catch (const std::bad_alloc &) {
             ++failed;
@@ -192,18 +201,30 @@ void SnapshotReader::prewarm_tables() {
     log_info("snapshot prewarm ready=%zu failed=%zu", ready, failed);
 }
 
+// A cache hit deliberately skips the SHA-256 recomputation. The bytes were
+// hashed against the manifest digest before they entered the map, the key binds
+// that digest together with the generation and both byte counts, and the stored
+// buffer is only mutable from inside this reader. Re-hashing on every hit would
+// re-check data no external writer can reach; the key check preserves the same
+// "bytes of this digest in this generation" guarantee at a fraction of the cost.
 bool SnapshotReader::load_table(const std::string &relative_path, const std::string &digest,
                                 uint64_t expected_bytes, std::string *content) {
-    const auto prepared = prewarmed_.find(relative_path);
-    if (prepared != prewarmed_.end()) {
-        *content = prepared->second;
-        return true;
-    }
     const auto cached = cache_.find(relative_path);
     if (cached != cache_.end()) {
-        cached->second.at = ++cache_clock_;
-        *content = cached->second.content;
-        return true;
+        TableCacheKey key;
+        key.generation = cached->second.generation;
+        key.digest = cached->second.digest;
+        key.bytes = cached->second.bytes;
+        key.content_bytes = cached->second.content.size();
+        if (table_cache_key_matches(key, generation_, digest, expected_bytes, key.content_bytes)) {
+            cached->second.at = ++cache_clock_;
+            *content = cached->second.content;
+            return true;
+        }
+        // Stale entry: the generation or the digest moved on. Drop it and read
+        // the verified bytes again instead of serving the older table.
+        cache_bytes_ -= cached->second.content.size();
+        cache_.erase(cached);
     }
     std::string text;
     if (!read_verified_table(relative_path, digest, expected_bytes, &text)) return false;
@@ -229,9 +250,14 @@ bool SnapshotReader::load_table(const std::string &relative_path, const std::str
     }
     CacheEntry entry;
     entry.content = text;
+    entry.digest = digest;
+    entry.generation = generation_;
+    entry.bytes = expected_bytes;
     entry.at = ++cache_clock_;
-    cache_bytes_ += entry.content.size();
-    cache_.emplace(relative_path, std::move(entry));
+    // Account only for bytes that really entered the map; a failed emplace must
+    // not leave cache_bytes_ larger than the entries it describes.
+    const auto inserted = cache_.emplace(relative_path, std::move(entry));
+    if (inserted.second) cache_bytes_ += inserted.first->second.content.size();
     *content = std::move(text);
     return true;
 }

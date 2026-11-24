@@ -106,7 +106,13 @@ bool read_all(int fd, void *data, size_t size) {
 // Receives the header plus any descriptors, then the payload.
 bool receive_frame(int fd, uint32_t *code, std::string *payload, std::vector<int> *fds) {
     fds->clear();
-    const auto fail = [fds]() {
+    // Every descriptor in the control message is already installed in this
+    // process, so the ones the caller will not receive must be closed here. The
+    // temporary owner below is the only place that knows about all of them.
+    std::vector<int> pending;
+    const auto fail = [fds, &pending]() {
+        for (const int received_fd : pending) ::close(received_fd);
+        pending.clear();
         for (const int received_fd : *fds) ::close(received_fd);
         fds->clear();
         return false;
@@ -126,23 +132,36 @@ bool receive_frame(int fd, uint32_t *code, std::string *payload, std::vector<int
         received = ::recvmsg(fd, &message, MSG_CMSG_CLOEXEC | MSG_WAITALL);
     } while (received < 0 && errno == EINTR);
     if (received <= 0) return false;
+    size_t received_count = 0;
     for (struct cmsghdr *cmsg = CMSG_FIRSTHDR(&message); cmsg != nullptr;
          cmsg = CMSG_NXTHDR(&message, cmsg)) {
         if (cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS) continue;
         if (cmsg->cmsg_len < CMSG_LEN(0)) return fail();
         const size_t count = (cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int);
         const int *received_fds = reinterpret_cast<const int *>(CMSG_DATA(cmsg));
-        for (size_t i = 0; i < count && i < kMaxFds; ++i) fds->push_back(received_fds[i]);
+        for (size_t i = 0; i < count; ++i) {
+            ++received_count;
+            // Descriptors past the protocol limit have no owner in the caller;
+            // close them immediately instead of letting them leak.
+            if (pending.size() < kMaxFds) {
+                pending.push_back(received_fds[i]);
+            } else {
+                ::close(received_fds[i]);
+            }
+        }
     }
     if (received != static_cast<ssize_t>(sizeof(header)) ||
         (message.msg_flags & MSG_CTRUNC) != 0) return fail();
-    if (header.fd_count > kMaxFds || fds->size() != header.fd_count) return fail();
+    if (header.fd_count > kMaxFds || received_count != header.fd_count) return fail();
     payload->clear();
     if (header.length > kMaxPayload) return fail();
     if (header.length > 0) {
         payload->resize(header.length);
         if (!read_all(fd, &(*payload)[0], header.length)) return fail();
     }
+    // Hand every accepted descriptor to the caller in one step; `pending` is
+    // empty afterwards, so a later failure path cannot close them twice.
+    fds->swap(pending);
     *code = header.code;
     return true;
 }

@@ -61,10 +61,13 @@ inline bool ranges_crc(const unsigned char *live, size_t module_size,
                        uint32_t &result, size_t &substituted) {
     result = 0;
     substituted = 0;
-    if (!live || ranges.empty() || ranges.size() > 512) return false;
+    // The descriptor budget is the protection library's own: at most 256
+    // entries. A zero-length entry is a valid no-op range, exactly as the
+    // reference accepts it.
+    if (!live || ranges.empty() || ranges.size() > 256) return false;
     uintptr_t previous_end = 0;
     for (const Range &range : ranges) {
-        if (!range.size || range.offset < previous_end || range.offset > module_size ||
+        if (range.offset < previous_end || range.offset > module_size ||
             range.size > module_size - range.offset) {
             return false;
         }
@@ -114,7 +117,11 @@ inline bool section_crc(const unsigned char *live, uintptr_t offset, size_t size
                         const std::vector<Patch> &patches, uint32_t &result, size_t &owned) {
     result = 0;
     owned = 0;
-    if (!live || size == 0 || (size % 4) != 0 || offset > UINTPTR_MAX - size) return false;
+    // A zero-length section is accepted by the reference: the loop body never
+    // runs, so the digest is the empty CRC (0), nothing is owned, and the
+    // verdict is "consistent". Whether a caller may ask for an empty section is
+    // that caller's own fail-closed decision (see verify_section).
+    if (!live || (size % 4) != 0 || offset > UINTPTR_MAX - size) return false;
     const uintptr_t end = offset + size;
 
     std::vector<const Patch *> active;

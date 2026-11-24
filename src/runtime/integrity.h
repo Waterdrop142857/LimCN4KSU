@@ -95,4 +95,12 @@ bool verify_section(uintptr_t module_base, const IntegrityProfile &profile, Patc
 bool verify_managed_section(uintptr_t module_base, const IntegrityProfile &profile,
                             PatchLedger *ledger, uint32_t *live_crc);
 
+// Same accounting as the reference owned_changes_only_locked(): both sections
+// share one `owned` accumulator and the total must cover every registered
+// substitute patch. Callers treat the result as an audit record, not as a gate:
+// LimbusCodeIntegrityCompat.cpp records the verdict and keeps running.
+bool verify_owned_sections(uintptr_t module_base, const IntegrityProfile &profile,
+                           PatchLedger *ledger, uint32_t *text_crc, uint32_t *managed_crc,
+                           size_t *owned);
+
 } // namespace bybus::runtime

@@ -2,6 +2,10 @@
 // indexes entries by (resource, original digest), and reads merged tables in a
 // bounded LRU cache. The monitor thread can warm verified tables before text
 // hooks are installed, keeping companion IPC and disk reads off Unity callbacks.
+//
+// Cached bytes carry the (generation, digest, manifest bytes, content bytes)
+// key that produced them, so opening a new generation drops every derived table
+// instead of replaying the previous generation's content.
 #pragma once
 
 #include <cstddef>
@@ -11,6 +15,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "runtime/cache_key.h"
 #include "runtime/companion.h"
 #include "runtime/translation_index.h"
 #include "translation/snapshot.h"
@@ -45,6 +50,10 @@ public:
     static std::string normalize_resource_key(const std::string &raw);
 
 private:
+    // Drops every derived table so the next read in a new generation goes back
+    // to the verified companion path, mirroring the reference runtime's
+    // "new index, clear derived caches" swap.
+    void reset_cache();
     bool read_verified_table(const std::string &relative_path, const std::string &digest,
                              uint64_t expected_bytes, std::string *content);
     bool load_table(const std::string &relative_path, const std::string &digest,
@@ -64,10 +73,12 @@ private:
 
     struct CacheEntry {
         std::string content;
+        std::string digest;
+        std::string generation;
+        uint64_t bytes = 0;
         uint64_t at = 0;
     };
     std::unordered_map<std::string, CacheEntry> cache_;
-    std::unordered_map<std::string, std::string> prewarmed_;
     uint64_t cache_bytes_ = 0;
     uint64_t cache_clock_ = 0;
 };
