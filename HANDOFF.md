@@ -9,7 +9,7 @@
 
 | 项 | 状态 |
 |---|---|
-| 代码基线 | 分支 `main`，HEAD `7970382`（本轮 **未提交**，56 个文件待提交） |
+| 代码基线 | 分支 `main`，工作区干净；本轮改动已按子系统拆成 6 个提交（见 §9） |
 | 参考实现 | 独立仓库，HEAD `bd32608`（Kotlin `container/*.kt` + 原生 `Foundation/*.cpp`），**唯一权威**；不并入本仓库 |
 | 源码规模 | `src/` 100 文件 / 18.5k 行；`tests/` 9 文件 / 1.75k 行 |
 | 桌面验证 | 主机测试全绿（警告即错误）、arm64 交叉编译 zero-warning（`-Wall -Wextra -Werror`）、模块 ZIP 17 条目摘要自洽 |
@@ -228,25 +228,28 @@ build\build.ps1 -Target clean
 
 ---
 
-## 9. 仓库状态与提交建议
+## 9. 仓库状态与提交记录
 
 ```
 branch: main
-HEAD  : 7970382 Add SIGSEGV guard and TMP font switching
-改动  : 43 修改 + 13 新增（共 56），全部未提交
-新增  : src/runtime/{type_signature.h, cache_key.h, library_watch.cpp, library_watch.h}
-        tests/{harness.h, harness.cpp, test_main.cpp, host_smoke.cpp(改), pairing_fidelity.cpp,
-               index_format.cpp, type_signature.cpp, integrity_parity.cpp, cache_keys.cpp, bounds.cpp}
+状态  : 工作区干净；本轮改动已按子系统拆成 6 个提交
 ```
 
-建议按四批提交（每批都能独立编译、独立跑通主机测试）：
+| 提交 | 范围 | 规模 |
+|---|---|---|
+| `d7567b8` | translation：文本门禁、数值绑定、ID 边界、覆盖率门禁、索引布局+摘要、`rangesCount` 256；含测试 harness 与 `pairing_fidelity` / `index_format` | 18 文件 / +1030 −120 |
+| `5d25491` | runtime：`type_signature`、签名整串比较、部分生效装钩语义、ruby 别名 trampoline、字体预算、内联空间校验、审计改为日志；含 `type_signature` 用例 | 14 文件 / +2065 −183 |
+| `e2c79c9` | runtime：`owned_code` 256/零长、`verify_owned_sections`、快照缓存四元组键、companion fd 收口；含 `integrity_parity` / `cache_keys` | 9 文件 / +377 −21 |
+| `8680386` | service：AXML 前缀、签名块 `<24`、PT_LOAD `memsz`、`job.detail`；含 `bounds` | 5 文件 / +437 −3 |
+| `5085d04` | docs：README/01/02/10/12/20/30/40/50/NOTICES/`HANDOFF` 同步 + 去环境化，`webui` 补一条文案 | 12 文件 / +450 −101 |
+| 本次提交 | build：把 `library_watch.cpp` 加进 zygisk 源清单（此前遗漏，干净检出会链接失败） | 1 文件 / +1 |
 
-1. `tests: harness + glob wiring`（`tests/harness.*`、`tests/test_main.cpp`、`build/test-host.ps1`、`host_smoke.cpp` 的机械改造）
-2. `translation: reference-parity gates, decimal binding, index layout`
-3. `runtime: signature normalization, partial-install semantics, integrity audit, cache keys`
-4. `service: bounds hardening + docs/handoff`
+新增文件：`src/runtime/{type_signature.h, cache_key.h, library_watch.cpp, library_watch.h}`；
+`tests/{harness.h, harness.cpp, test_main.cpp, pairing_fidelity.cpp, index_format.cpp, type_signature.cpp, integrity_parity.cpp, cache_keys.cpp, bounds.cpp}`；`HANDOFF.md`。
 
-> 提交前请确认 `build/SHA256SUMS` 与 ZIP 一致，并重跑 §7 的三条命令。
+**拆分口径（便于复核）**：按「一次提交只改一个运行边界」切分——translation 纯数据、runtime 装钩、runtime 完整性/读取、service、docs、build。`5d25491` 里同时含有一批更早未提交的运行时改动（`state`、`text_router`、`appsealing`、`library_watch`），因为它们在 `hooks.cpp` 内部与本次改动交错，无法按 hunk 拆开。
+
+> 复核方式：`git log --stat -6` 逐提交看范围，然后重跑 §7 的三条命令；`build/SHA256SUMS` 与 ZIP 摘要必须一致。
 
 ---
 
