@@ -93,7 +93,7 @@
 - `android_manifest.*`：最小二进制 AXML 读取器，只取包名与 `<application android:name>`；等价于 `PackageManager` 读取 `ApplicationInfo.className`。
 - `native_alignment.*`：校验每个 `PT_LOAD` 的对齐、必需库与重复库，语义基线是 `LimbusNativeProfile.requireLibraryAlignment` 与 `LimbusNativeStructure`（提交 `bd32608`，Java 实现，未复制代码）。
 
-上表的 AppSealing 三项以 BYBUS 的 `third_party/virtualapp-upstream/lib/src/main/jni/Foundation/` 为基线（提交 `bd32608`），只保留结构资格判定、报告桥、站点补丁与自有代码段 CRC 的表达方式；所有偏移、期望指令字、栈布局与站点常量改由 `bybusd` 从本机 APK 生成的 `profile.appsealing` 提供，代码中不写死版本常量。
+上表的 AppSealing 三项以参考实现仓库的 `third_party/virtualapp-upstream/lib/src/main/jni/Foundation/`（以下文件由该项目移植）为基线（提交 `bd32608`），只保留结构资格判定、报告桥、站点补丁与自有代码段 CRC 的表达方式；所有偏移、期望指令字、栈布局与站点常量改由 `bybusd` 从设备上已安装 APK 生成的 `profile.appsealing` 提供，代码中不写死版本常量。
 
 按 `02-code-quality-standard.md` §1，移植保留了原始路径与修改说明；逻辑本身不复制 VirtualApp 的容器重定向、JNI 回调与版本常量。具体地，未复制 `IORelocator` 的容器文件描述符重定向、`MapsRedirector` 的映射改写与 `syscall` Hook：本模块的运行时只在官方游戏主进程内工作，不改变文件路径解析语义。
 

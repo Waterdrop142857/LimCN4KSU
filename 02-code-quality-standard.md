@@ -6,7 +6,7 @@
 
 按实际运行边界组织源码：`webui`、`control`、`service`、`translation`、`runtime`、`shared`。`translation` 负责纯数据的归档清单与 JSON 配对；`runtime` 只负责游戏进程里的快照查找、文本替换和字体。`shared` 只放稳定协议与哈希格式。禁止为减少行数把网络、文件系统、配对规则和 Hook 生命周期写入同一个函数。
 
-从原仓库提取逻辑时，保留原始路径、提交号、许可证与修改说明。现有 `TranslationJsonPairer`、`TranslationTextPolicy`、`TranslationSnapshot` 及字体资产是行为基准，移植后的显示字段、重复 ID 与嵌套数组规则必须与其保持一致。[原配对器](../source/app/src/main/java/com/example/limbuszhcn/container/TranslationJsonPairer.kt) · [原字段策略](../source/app/src/main/java/com/example/limbuszhcn/container/TranslationTextPolicy.kt)
+从参考实现仓库提取逻辑时，保留原始路径、提交号、许可证与修改说明。现有 `TranslationJsonPairer`、`TranslationTextPolicy`、`TranslationSnapshot` 及字体资产是行为基准，移植后的显示字段、重复 ID 与嵌套数组规则必须与其保持一致。原配对器：参考实现仓库的 `container/TranslationJsonPairer.kt`；原字段策略：参考实现仓库的 `container/TranslationTextPolicy.kt`。
 
 ## 2. 输入与数据边界
 
@@ -17,7 +17,7 @@
 - UTF-8 与 JSON 解析须有明确失败结果。拒绝截断和格式错误；不按是否含中文、空白、替换字符或任意文本质量标准筛掉包内容。未知字段保留原值。
 - 快照条目同时绑定来源、游戏安装标识、规范资源名、原文摘要及合并结果摘要。仅凭文件名命中不得替换。
 
-原项目的归档大小约束不移植到本模块；兼容性以路径映射、JSON 结构和摘要校验为准。[原本地包实现](../source/app/src/main/java/com/example/limbuszhcn/translation/LocalTranslationArchive.kt) · [原快照实现](../source/app/src/main/java/com/example/limbuszhcn/container/LiveTranslationStore.kt)
+原项目的归档大小约束不移植到本模块；兼容性以路径映射、JSON 结构和摘要校验为准。原本地包实现：参考实现仓库的 `translation/LocalTranslationArchive.kt`；原快照实现：参考实现仓库的 `container/LiveTranslationStore.kt`。
 
 ## 3. 一致性与并发
 
@@ -38,7 +38,7 @@
 - 字体准备失败、原文摘要不符、快照损坏、重复资源名或 JSON 转换失败时使用原始返回值。不得用全局字符串搜索猜测译文。
 - 日志不写账号、设备标识、完整游戏原文、译文正文、API Key 或任意保护模块报告内容。诊断只包含阶段、计数、版本摘要和受限错误码。
 
-Hook 及字体需保持原项目的线程和 IL2CPP 对象生命周期约束，移植时应逐项核对，不把 VirtualApp 的全局状态直接复制到官方进程。[原运行时](../source/third_party/virtualapp-upstream/lib/src/main/jni/Foundation/LimbusTranslationRuntime.cpp)
+Hook 及字体需保持原项目的线程和 IL2CPP 对象生命周期约束，移植时应逐项核对，不把 VirtualApp 的全局状态直接复制到官方进程。原运行时：参考实现仓库的 `third_party/virtualapp-upstream/lib/src/main/jni/Foundation/LimbusTranslationRuntime.cpp`。
 
 ## 5. WebUI 与任务体验
 
@@ -59,11 +59,11 @@ Hook 及字体需保持原项目的线程和 IL2CPP 对象生命周期约束，�
 | 原生运行时 | 原函数返回值、摘要命中、摘要不符和字体失败四条路径均验证 |
 | 实机游戏 | Root 无注入基线、空模块、Hook、汉化四阶段分别记录启动与安全提示结果；核对官方资源摘要及重复下载情况 |
 
-桌面测试可覆盖纯 C/C++ 配对和快照逻辑；Android 实机测试才可证明 Zygisk 生命周期、SELinux 文件访问、字体显示及游戏结果。单元测试通过不等于游戏安全检查通过。[原项目运行验证说明](../source/docs/automatic-native-compatibility.md)
+桌面测试可覆盖纯 C/C++ 配对和快照逻辑；Android 实机测试才可证明 Zygisk 生命周期、SELinux 文件访问、字体显示及游戏结果。单元测试通过不等于游戏安全检查通过。原项目运行验证说明：参考实现仓库的 `docs/automatic-native-compatibility.md`。
 
 ## 7. 构建与交付门槛
 
-原生目标为 `arm64-v8a`，使用项目目录中的 Android NDK 交叉编译。固定 Android API 下限、编译器版本、依赖源码版本与模块协议版本，并在构建产物中记录。启用合理警告级别，警告作为需处理的问题；Release 产物不得依赖测试开关、临时兼容配置或硬编码设备路径。
+原生目标为 `arm64-v8a`，使用 Android 交叉编译工具链。固定 Android API 下限、编译器版本、依赖源码版本与模块协议版本，并在构建产物中记录。启用合理警告级别，警告作为需处理的问题；Release 产物不得依赖测试开关、临时兼容配置或硬编码设备路径。
 
 构建流水线分别产出 Zygisk `.so`、后台可执行文件和 WebUI 静态资源，随后检查 ELF 架构、动态依赖、模块 ZIP 路径、许可文件与 SHA-256 清单。Zygisk `.so` 的文件名和目录遵循 `zygisk/arm64-v8a.so`；其 C++ 运行时配置需按官方 Zygisk 模块样例评估。打包脚本只从明确列出的产物目录取文件，不包含源码工作区或测试归档。[Zygisk 构建样例](https://github.com/topjohnwu/zygisk-module-sample)
 

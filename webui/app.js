@@ -56,6 +56,7 @@ import './app.css';
     snapshot_index_missing: '缺少翻译索引',
     snapshot_index_invalid: '翻译索引校验失败',
     appsealing_guard_mismatch: '保护库守卫指令不匹配',
+    appsealing_exact_mismatch: '保护库完整配置校验失败',
     font_component_rejected: '字体组件准备失败',
     unsupported_runtime: '运行环境不受支持',
     zygisk_missing: '未检测到 Zygisk',

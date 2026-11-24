@@ -157,7 +157,7 @@ KernelSU 当前管理器将模块 WebUI 放在同一个 `mui.kernelsu.org` 来�
 ```
 
 - `index.schema` 固定为 9；`path` 只允许 `index/index.bin`；`bytes` 上限 64 MiB 且大于 0；`unique`/`terms`/`contextual` 各不超过 200000。任一不符以 `manifest_index` 拒绝整份清单。
-- 索引文件自身以 `LZTI1\0` 魔数加 schema 9 开头，内容为三段长度前缀的 UTF-8 映射；三个计数必须与清单声明一致。
+- 索引文件自身以 `LZTI1\0`（6 字节魔数）+ 大端 u32 `schema`（固定 9）+ 三个大端 u32 计数（`unique` / `terms` / `contextual`）开头，随后是三组条目：每条为「大端 u32 长度 + 裸 UTF-8」的 key/value 对，三个映射按插入序写出，无尾部、无填充、无校验和；清单里的 `index.sha256`/`bytes`/三个计数与文件不符即整份拒绝。
 - `index` 缺省表示该 generation 没有索引（旧 generation 的兼容形态）：JSON 表查表仍可用，散文/术语/上下文查表关闭，运行时不报错。
 - `index` 参与 generation 摘要：`canonical_inputs` 含 `index <sha256> <unique> <terms> <contextual>`，重建索引会改变 generation。
 
@@ -169,7 +169,7 @@ companion 的 `Hello` 响应通过 `SCM_RIGHTS` 附带最多三个只读描述�
 | 2 | `font/ChineseFont.ttf` | 该 generation 发布了字体 |
 | 3 | `index/index.bin` | 清单 `index` 存在 |
 
-句柄数量由实际存在的项决定（1–3 个）。运行时的校验顺序是：读清单 → 校验 `generation` 与 Hello 一致 → 载入表索引 → 校验索引的字节数、SHA-256 与三个计数；任一失败即 `hookState=rejected`，回执 `code=snapshot_invalid`，细分理由只写进程日志。
+句柄数量由实际存在的项决定（1–3 个）。运行时的校验顺序是：读清单 → 校验 `generation` 与 Hello 一致 → 载入表索引 → 校验索引的字节数、SHA-256 与三个计数；任一失败即 `hookState=rejected`，回执码按失败位置取 `snapshot_invalid` 或 `index_invalid`（后者是索引分支的统一码，见 §4.1），细分理由只写进程日志。
 
 ## 4. 错误码（固定集合）
 
@@ -183,13 +183,14 @@ WebUI 只按该集合显示本地化文案，不解析 `message`。
 
 | 理由 | 产生位置 | 含义 |
 | --- | --- | --- |
-| `index_invalid` | 预留 | 索引整体不可用的 UI 文案；当前尚无产生点 |
+| `index_invalid` | `src/runtime/zygisk_module.cpp` | `snapshot_index_missing`/`snapshot_index_invalid` 在回执中的统一 UI 码；进程日志保留原始细分理由 |
 | `snapshot_index_missing` | `src/runtime/snapshot_reader.cpp` | 清单声明了 `index` 但 companion 没有交付第三个描述符 |
 | `snapshot_index_invalid` | `src/runtime/snapshot_reader.cpp` | 索引字节数、SHA-256、魔数/schema 或三个计数与清单不符 |
 | `appsealing_guard_mismatch` | `src/runtime/appsealing.cpp` | 安装前复核 `guards` 时，活体指令字与计划不一致 |
-| `font_component_rejected` | 预留 | TMP 字体组件准备失败的 UI 文案；字体组件 Hook 接入后使用 |
+| `appsealing_exact_mismatch` | `src/runtime/appsealing.cpp` | 清单 `exactProfile` 与运行时按结构字段重算的摘要不一致 |
+| `font_component_rejected` | `src/runtime/state.cpp` | 字体摘要已通过，但 TMP/Unity 组件拒绝已创建的中文字体资产 |
 
-清单解析失败的细分理由同样只写日志：`manifest_index`、`manifest_appsealing_guards`、`manifest_appsealing_exact`、`manifest_appsealing_*`；构建期的细分理由写 `job.status.detail`：`qualification_sdk`、`qualification_abi`、`qualification_native_*`、`qualification_signer`、`build_index_*`。
+清单解析失败的细分理由同样只写日志：`manifest_index`、`manifest_appsealing_guards`、`manifest_appsealing_exact`、`manifest_appsealing_*`；构建期的细分理由写 `job.status.detail`：`qualification_sdk`、`qualification_abi`、`qualification_native_*`、`qualification_signer`、`build_index_*`。`exactProfile` 在升级后为必填项，旧 generation 缺少该字段时会在 `snapshot_reader` 阶段整体被拒，需要重新导入/构建；WebUI 对没有更细回执码的情况显示 `snapshot_invalid`。
 
 ## 5. 任务语义
 

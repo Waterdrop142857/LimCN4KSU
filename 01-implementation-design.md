@@ -1,18 +1,18 @@
 # BYBUS KernelSU 原生汉化移植实现设计
 
-版本：2026-11-24。依据 `D:\BYBUS\source` 的提交 `bd3260848029ed41558da4f40a9c9edf6f622dd6`。本文是实现设计，尚未在真实设备上验证 Zygisk 注入后的游戏表现。
+版本：2026-11-24。依据参考实现仓库（独立目录，不并入本仓库）的提交 `bd3260848029ed41558da4f40a9c9edf6f622dd6`。本文是实现设计，尚未在真实设备上验证 Zygisk 注入后的游戏表现。
 
 ## 1. 目标与边界
 
 官方 `com.ProjectMoon.LimbusCompany` 安装包直接在原生 Android 环境运行。用户已确认该设备在 Root 环境、无代码注入时可以正常游玩。交付物为 KernelSU 模块 ZIP，管理入口是 KernelSU WebUI。模块支持现成的都市零协会汉化包及兼容 ZIP、7z 本地文本包，启动前针对设备上已有的游戏原文生成汉化快照。已下载的新原文在重新生成快照并重启游戏后生效。
 
-本阶段保留游戏自己的资源文件、下载清单、登录和账号数据。运行时只在游戏文本读取函数返回后，按资源身份及原文摘要替换内存中的 JSON 字符串。缺少匹配快照时返回原结果。AI 生成、在线逐条翻译、运行中重新配对和首次下载后的立即汉化不进入首版。BYBUS 现有实现的读后合并和文本配对是行为基准。[源码依据](../source/app/src/main/java/com/example/limbuszhcn/container/TranslationJsonPairer.kt) · [原生读取入口](../source/third_party/virtualapp-upstream/lib/src/main/jni/Foundation/LimbusTranslationRuntime.cpp)
+本阶段保留游戏自己的资源文件、下载清单、登录和账号数据。运行时只在游戏文本读取函数返回后，按资源身份及原文摘要替换内存中的 JSON 字符串。缺少匹配快照时返回原结果。AI 生成、在线逐条翻译、运行中重新配对和首次下载后的立即汉化不进入首版。BYBUS 现有实现的读后合并和文本配对是行为基准。源码依据：参考实现仓库的 `container/TranslationJsonPairer.kt`；原生读取入口：参考实现仓库的 `third_party/virtualapp-upstream/lib/src/main/jni/Foundation/LimbusTranslationRuntime.cpp`。
 
-设备前提是 arm64、KernelSU 与可用的 Zygisk 实现。KernelSU 本身没有内置 Zygisk，模块声明外部依赖并在 WebUI 中报告检测状态。模块不打包或重新分发 ZygiskNext。发布和安装过程不要求完整 Android SDK，原生可执行文件与 `.so` 使用 NDK 编译，WebUI 是静态资源。[KernelSU FAQ](https://kernelsu.org/guide/faq) · [ZygiskNext 项目](https://github.com/Dr-TSNG/ZygiskNext) · [KernelSU WebUI](https://kernelsu.org/guide/module-webui.html)
+设备前提是 arm64、KernelSU 与可用的 Zygisk 实现。KernelSU 本身没有内置 Zygisk，模块声明外部依赖并在 WebUI 中报告检测状态。模块不打包或重新分发 ZygiskNext。发布和安装过程不要求完整 Android SDK，原生可执行文件与 `.so` 通过交叉编译产出，WebUI 是静态资源。[KernelSU FAQ](https://kernelsu.org/guide/faq) · [ZygiskNext 项目](https://github.com/Dr-TSNG/ZygiskNext) · [KernelSU WebUI](https://kernelsu.org/guide/module-webui.html)
 
 ## 2. 产物及模块边界
 
-建议在新的实现目录中建立以下结构。此目录与原仓库 `D:\BYBUS\source` 保持独立；复制或提取原仓库代码时记录来源与许可证。
+建议在新的实现目录中建立以下结构。此目录与参考实现仓库保持独立；复制或提取参考实现代码时记录来源与许可证。
 
 ```text
 module/
@@ -28,8 +28,10 @@ module/
   zygisk/
     arm64-v8a.so             # 仅进入官方游戏主进程
   assets/
-    ChineseFont.ttf.xz       # 按原项目许可和 SHA-256 核验
+    ChineseFont.ttf          # 按原项目许可和 SHA-256 核验
 ```
+
+原设计为 `assets/ChineseFont.ttf.xz`；本构建环境无 xz 编码器，改为原样分发 `.ttf`（模块 ZIP 自身用 deflate），校验语义（固定 SHA-256）不变，见 `10-port-plan.md` §3 偏差 1。
 
 持久状态、归档与快照保存在模块安装目录之外的专用私有目录，例如 `/data/adb/bybus/`，避免模块升级替换目录时丢失。该目录由后台服务创建并按固定权限管理。卸载时由明确的清理动作处理，不能让安装脚本误删用户导入包。
 
@@ -60,17 +62,17 @@ WebUI 仅调用 `status`、`sources list`、`sources select <id>`、`update star
 
 `bybusd` 根据 Android 已安装包信息定位官方游戏的数据目录，再在确定的 `Localize` 根目录下只读枚举 `jp`、`en`、`kr` 文本。它不得扫描账号、存档或其他任意私有文件。目录下的路径必须规范化并验证仍位于允许根内。原文尚未下载时，状态为 `waiting_for_game_text`，已验证汉化归档继续保留。
 
-现有 `GameStorage` 接口可作为功能清单；`ContainerWorkspaceStorage` 的容器路径不能直接用于原生游戏。新实现应把来源定位、文本枚举和原文读取放在单独适配层。[存储接口](../source/app/src/main/java/com/example/limbuszhcn/gamefs/GameStorage.kt) · [容器存储](../source/app/src/main/java/com/example/limbuszhcn/container/ContainerWorkspaceStorage.kt)
+现有 `GameStorage` 接口可作为功能清单；`ContainerWorkspaceStorage` 的容器路径不能直接用于原生游戏。新实现应把来源定位、文本枚举和原文读取放在单独适配层。存储接口：参考实现仓库的 `gamefs/GameStorage.kt`；容器存储：参考实现仓库的 `container/ContainerWorkspaceStorage.kt`。
 
 ### 4.2 归档读取
 
-默认源使用项目现有固定 GitHub Release 地址，选择名称严格匹配 `LimbusLocalize_<数字版本>.7z` 的资源。校验上游提供的 SHA-256；上游未提供时记录本地计算值用于缓存一致性，不将其视作发布者认证。本地源只接受兼容的 ZIP、7z JSON 文本包；保留路径遍历与重复目标校验，不对文件数量、展开大小或文本内容设置预设限制，并忽略包内插件及可执行内容。[默认源解析](../source/app/src/main/java/com/example/limbuszhcn/update/TranslationUpdateManager.kt) · [本地包边界](../source/app/src/main/java/com/example/limbuszhcn/translation/LocalTranslationArchive.kt)
+默认源使用项目现有固定 GitHub Release 地址，选择名称严格匹配 `LimbusLocalize_<数字版本>.7z` 的资源。校验上游提供的 SHA-256；上游未提供时记录本地计算值用于缓存一致性，不将其视作发布者认证。本地源只接受兼容的 ZIP、7z JSON 文本包；保留路径遍历与重复目标校验，不对文件数量、展开大小或文本内容设置预设限制，并忽略包内插件及可执行内容。默认源解析：参考实现仓库的 `update/TranslationUpdateManager.kt`；本地包边界：参考实现仓库的 `translation/LocalTranslationArchive.kt`。
 
 ### 4.3 离线配对
 
-对于每张已下载的原文表，按现有 `TranslationJsonPairer.merge` 规则，使用表名、稳定记录 ID、显示字段、嵌套结构与重复 ID 消歧规则生成合并后的完整 JSON。英、韩、日资源各自按对应原文与同一份包内译文配对。未匹配字段保留原文；数字、游戏逻辑字段、资源元数据和数组结构不改变。`TranslationSnapshot` 的原文哈希绑定规则也必须纳入兼容性用例。[配对规则](../source/app/src/main/java/com/example/limbuszhcn/container/TranslationJsonPairer.kt) · [字段白名单](../source/app/src/main/java/com/example/limbuszhcn/container/TranslationTextPolicy.kt) · [快照绑定](../source/app/src/main/java/com/example/limbuszhcn/container/TranslationSnapshot.kt)
+对于每张已下载的原文表，按现有 `TranslationJsonPairer.merge` 规则，使用表名、稳定记录 ID、显示字段、嵌套结构与重复 ID 消歧规则生成合并后的完整 JSON。英、韩、日资源各自按对应原文与同一份包内译文配对。未匹配字段保留原文；数字、游戏逻辑字段、资源元数据和数组结构不改变。`TranslationSnapshot` 的原文哈希绑定规则也必须纳入兼容性用例。配对规则：参考实现仓库的 `container/TranslationJsonPairer.kt`；字段白名单：参考实现仓库的 `container/TranslationTextPolicy.kt`；快照绑定：参考实现仓库的 `container/TranslationSnapshot.kt`。
 
-纯模块无法直接执行原有 Kotlin 类。首版用原生后台程序实现离线配对，并以原仓库的真实包及原文样本建立差分验证，逐字段比较原实现与新实现的输出。配对器属于高风险移植点；规则未覆盖的表要保持原文，不能通过按字符串全局替换补齐。
+纯模块无法直接执行原有 Kotlin 类。首版用原生后台程序实现离线配对，并以参考实现仓库的真实包及原文样本建立差分验证，逐字段比较原实现与新实现的输出。配对器属于高风险移植点；规则未覆盖的表要保持原文，不能通过按字符串全局替换补齐。
 
 建议的原生接口为 `ArchiveImporter::import(path) -> VerifiedPackage`、`GameTextScanner::scan() -> SourceSet`、`JsonPairer::merge(resourceKey, original, translated) -> MergeResult` 和 `SnapshotBuilder::build(package, sources) -> Generation`。`MergeResult` 同时返回合并内容、匹配字段数、未匹配字段数及失败原因。归档读取器不承担 JSON 配对；配对器不读取磁盘；快照构建器负责在提交前复核所有输入的哈希。
 
@@ -111,7 +113,7 @@ WebUI 仅调用 `status`、`sources list`、`sources select <id>`、`update star
 
 上述字符串是格式占位符，构建器必须写入实际摘要和字节数。WebUI 和游戏进程均只消费经过 schema、路径、文件长度和摘要验证的清单。协议或配对规则变化时提升 schema，旧 generation 保留到新版本成功发布。
 
-`index` 是同一份清单里的第二个查表入口，承载按“源文本 → 译文”而非“资源名 + 原文摘要”组织的散文、术语与上下文索引，供不在 `Localize` 表里的文本（剧情、RPG 对话、选项、通知、UI 标签）使用。它按 `TranslationIndexCompiler.kt` 的 unique/terms/contextual 三类映射与冲突规则编译，二进制带 `LZTI1\0` 魔数与 schema 9，路径固定为 `index/index.bin`；三个计数必须与文件内容一致。`index` 与 `profile` 互相独立：缺 `index` 只关闭散文/术语查表，缺 `profile` 只关闭打补丁，两者都不阻止快照发布。索引同样参与 generation 摘要。
+`index` 是同一份清单里的第二个查表入口，承载按“源文本 → 译文”而非“资源名 + 原文摘要”组织的散文、术语与上下文索引，供不在 `Localize` 表里的文本（剧情、RPG 对话、选项、通知、UI 标签）使用。它按 `TranslationIndexCompiler.kt` 的 unique/terms/contextual 三类映射与冲突规则编译，二进制带 `LZTI1\0` 魔数与 schema 9，路径固定为 `index/index.bin`；三个计数必须与文件内容一致。布局为 `LZTI1\0` + schema 9 + `uniqueCount`/`termCount`/`contextualCount` 三个 u32，随后三组条目；每条为「u32 长度 + UTF-8」的 key 与 value，三个映射按插入序写出，无尾部、填充或校验和。摘要输入序列为 `path, context, field, source, translation, stable_id`（`context` 即参考实现的 `id`），排序与去重键同此六项。`index` 与 `profile` 互相独立：缺 `index` 只关闭散文/术语查表，缺 `profile` 只关闭打补丁，两者都不阻止快照发布。索引同样参与 generation 摘要。
 
 构建先写临时目录并逐项校验，完成后刷新数据与目录元数据，再原子切换 `active` 指针。中断、解包失败或源文件在构建期间变化时，继续使用上一完整快照。游戏进程启动时固定使用一个 generation；WebUI 切源和后台更新不改变正在运行的进程。保留有限数量的旧 generation，确认没有运行进程引用后再清理。
 
@@ -121,7 +123,7 @@ WebUI 仅调用 `status`、`sources list`、`sources select <id>`、`update star
 
 Zygisk 模块在进程 specialization 阶段识别官方包名、进程名和 UID。只在 `com.ProjectMoon.LimbusCompany` 主进程准备运行时。进程已进入应用沙箱时，通过 Zygisk companion 获取只读的快照句柄；模块不依赖直接读取 BYBUS 私有目录，也不在游戏进程执行下载和解包。[Zygisk API](https://github.com/topjohnwu/zygisk-module-sample/blob/master/module/jni/zygisk.hpp)
 
-运行时须从现有 `LimbusTranslationRuntime.cpp` 提取 IL2CPP 方法发现、文本读取、字体与必要的显示后备逻辑。移除 `VirtualCore`、`NativeEngine`、虚拟包服务、容器目录重定向和容器内的 Java 回调依赖。新运行时在原读取函数返回后取得资源名及原始 JSON，查找 `(资源名, 原文摘要)` 完全匹配的快照条目，核对快照条目长度与摘要后创建新的 IL2CPP 字符串。任何环节失败都返回原始对象。`open`、`openat` 等游戏资源文件读取不进入本方案的汉化路径。[现有读取 Hook](../source/third_party/virtualapp-upstream/lib/src/main/jni/Foundation/LimbusTranslationRuntime.cpp) · [现有容器回调](../source/third_party/virtualapp-upstream/lib/src/main/java/com/lody/virtual/client/NativeEngine.java)
+运行时须从现有 `LimbusTranslationRuntime.cpp` 提取 IL2CPP 方法发现、文本读取、字体与必要的显示后备逻辑。移除 `VirtualCore`、`NativeEngine`、虚拟包服务、容器目录重定向和容器内的 Java 回调依赖。新运行时在原读取函数返回后取得资源名及原始 JSON，查找 `(资源名, 原文摘要)` 完全匹配的快照条目，核对快照条目长度与摘要后创建新的 IL2CPP 字符串。任何环节失败都返回原始对象。`open`、`openat` 等游戏资源文件读取不进入本方案的汉化路径。现有读取 Hook：参考实现仓库的 `third_party/virtualapp-upstream/lib/src/main/jni/Foundation/LimbusTranslationRuntime.cpp`；现有容器回调：参考实现仓库的 `third_party/virtualapp-upstream/lib/src/main/java/com/lody/virtual/client/NativeEngine.java`。
 
 进程内接口可收敛为 `SnapshotReader::open(readOnlyFd)`、`SnapshotReader::lookup(resourceKey, originalSha256)`、`TranslationRuntime::onTextRead(resourceKey, originalIl2cppString)` 和 `FontRuntime::ensureReady()`。`onTextRead` 调用原方法取得结果后才执行查找。句柄交付失败或查找未命中时不创建新字符串。运行时按 `generation`、命中数、未命中数和错误码记录计数，不保存正文。
 
@@ -134,23 +136,25 @@ Zygisk 模块在进程 specialization 阶段识别官方包名、进程名和 UI
 | 表级替换 | `LoadLocalizeFileSync`、`TextAsset.get_text`：按 `(资源名, 原文摘要)` 命中后替换 | 已实现 |
 | 索引查表 | `src/runtime/translation_index.*`、`src/runtime/text_router.*`：JSON 表 → UI 状态标签 → contextual → unique → terms → 原文；失败一律返回原对象 | 已实现 |
 | 组件级文本 | UGUI `Text.set_text`（含字体替换）、TMP `set_text`/`set_text_string`、`Announcer.SetDescription`、`StorySystem.Dialog..ctor`、`RPGSystem.RpgLocText_Dialogue.GetTextData`、`ChoiceScrollViewBox.SetText`、`NoticeUIContentText.SetData`、`ActionChoiceButton.SetButtonData`，以及通用对象字符串字段 | 已实现 |
-| 富文本/注音、TMP 材质与字号 | `rich_text.h`、`font_proof.h`、`flow_text_proof.h`、`managed_state.h`、`font_materials.h`、`font_scale.h`、`text_provenance.h`、`method_flags.h` | 已移植未接入 |
-| 剧情/RPG/选项/通知状态机 | 原版 layout/flow/choice 状态机 | 未移植 |
+| 富文本/注音、TMP 材质与字号 | `rich_text.h`、`font_proof.h`、`flow_text_proof.h`、`managed_state.h`、`font_materials.h`、`font_scale.h`、`text_provenance.h`、`method_flags.h` | 已接入：TMP 字体/共享材质/shader ratio、`TMProStringMatcher` 六类格式入口与三个 Ruby formatter |
+| 剧情/RPG/选项/通知状态机 | `text_policy` 显示字段白名单 + TMP wrapping/overflow 保存恢复 | 部分接入；原版 layout/flow/choice 组件级证明状态机未逐项移植 |
 
 `text_router` 的路由顺序以代码为准：资源提示可用且文本像 JSON 时先走表级查找；否则先匹配枚举化的 UI 状态标签（`ui_labels`），再用 `上下文键 = id + 单元分隔符 + 字段 + 单元分隔符 + 源文本` 查 contextual，最后依次查 unique 与 terms。任何一步命中的译文与原文相同都视为未命中。
 
+装钩失败只影响该钩子本身：只有 `LoadLocalizeFileSync` 与 `TextAsset.get_text` 两个入口钩子失败才回滚整次安装并回执 `unsupported_runtime`；UGUI、TMP、`Announcer`、剧情/RPG/选项/通知、富文本与 ruby 钩子失败只记日志。成功位取 `LoadLocalizeFileSync && TextAsset.get_text && TMP_Text.set_text` 三个 trampoline 同时就绪，因此 `hookState=installed` 表示入口路径就绪，不表示全部钩子命中。
+
 Zygisk 入口要保持轻量；现有原生代码广泛使用 C++ 标准库，不能未经隔离就把整个 VirtualApp 原生库直接注入 Zygote。构建时应评估自包含 C++ 运行时与宿主库冲突，并在空模块阶段先验证加载和卸载。官方 Zygisk 样例对其 C++ STL 配置有专门说明。[Zygisk 样例](https://github.com/topjohnwu/zygisk-module-sample)
 
-中文字体沿用项目现有授权字体，并在模块安装或快照构建时按固定大小及 SHA-256 校验。Unity 当前的字体加载入口要求可读取的文件路径，因此快照句柄本身不能作为字体方案。首选在实机验证已打开字体描述符的 `/proc/self/fd/<n>` 路径是否可被 Unity 接受；若不支持，由后台服务在游戏私有数据的独立辅助目录放置经校验的字体副本，并配置游戏 UID 可读取的权限与上下文。该辅助目录不位于 `Localize` 或 Unity 下载资源目录。运行时确认字体加载成功后才返回中文 JSON，不能沿用原代码中从容器 `active-index.path` 反推出字体路径的假设。[原字体校验](../source/third_party/virtualapp-upstream/lib/src/main/java/com/lody/virtual/helper/compat/LimbusTranslationAssets.java) · [原字体路径](../source/third_party/virtualapp-upstream/lib/src/main/jni/Foundation/LimbusTranslationRuntime.cpp)
+中文字体沿用项目现有授权字体，并在模块安装或快照构建时按固定大小及 SHA-256 校验。Unity 当前的字体加载入口要求可读取的文件路径，因此快照句柄本身不能作为字体方案。首选在实机验证已打开字体描述符的 `/proc/self/fd/<n>` 路径是否可被 Unity 接受；若不支持，由后台服务在游戏私有数据的独立辅助目录放置经校验的字体副本，并配置游戏 UID 可读取的权限与上下文。该辅助目录不位于 `Localize` 或 Unity 下载资源目录。运行时确认字体加载成功后才返回中文 JSON，不能沿用原代码中从容器 `active-index.path` 反推出字体路径的假设。原字体校验：参考实现仓库的 `third_party/virtualapp-upstream/lib/src/main/java/com/lody/virtual/helper/compat/LimbusTranslationAssets.java`；原字体路径：参考实现仓库的 `third_party/virtualapp-upstream/lib/src/main/jni/Foundation/LimbusTranslationRuntime.cpp`。
 
 ## 6. 兼容性与验证门槛
 
-原版在 Root 环境可玩是本项目的设备基线。Zygisk 注入、IL2CPP Hook 和字体加载会形成新的运行条件。现有针对 VirtualApp 的 AppSealing 处理、版本配置及保护路径不作为移植完成的证据，也不能直接搬入新运行时。每个受支持游戏版本都要分别记录：原版基线、仅加载空 Zygisk 模块、启用文本 Hook、应用快照后的启动与安全提示结果。出现安全提示或退出时停止宣称兼容，并保留最少必要诊断。[原项目安全诊断](../source/docs/startup-safety-diagnostics.md) · [版本约束](../source/third_party/virtualapp-upstream/lib/src/main/java/com/lody/virtual/helper/compat/LimbusNativeProfile.java)
+原版在 Root 环境可玩是本项目的设备基线。Zygisk 注入、IL2CPP Hook 和字体加载会形成新的运行条件。现有针对 VirtualApp 的 AppSealing 处理、版本配置及保护路径不作为移植完成的证据，也不能直接搬入新运行时。每个受支持游戏版本都要分别记录：原版基线、仅加载空 Zygisk 模块、启用文本 Hook、应用快照后的启动与安全提示结果。出现安全提示或退出时停止宣称兼容，并保留最少必要诊断。原项目安全诊断：参考实现仓库的 `docs/startup-safety-diagnostics.md`；版本约束：参考实现仓库的 `third_party/virtualapp-upstream/lib/src/main/java/com/lody/virtual/helper/compat/LimbusNativeProfile.java`。
 
 验收按以下顺序执行。
 
 1. WebUI 能识别模块、Zygisk 依赖、游戏安装状态，并显示固定错误码（含 `game.profileState`/`profileCode` 与 `runtime.compatState`）。
-2. 官方及本地归档通过校验后，可针对已有原文生成快照；同一输入重复构建得到相同内容。快照必须同时带 `index`，且 `manifest.json` 的 `index.sha256`/`bytes`/三个计数与 `index/index.bin` 一致。
+2. 官方及本地归档通过校验后，可针对已有原文生成快照；同一输入重复构建得到相同内容。快照必须同时带 `index`，且 `manifest.json` 的 `index.sha256`/`bytes`/三个计数与 `index/index.bin` 一致。配对覆盖率不足 90% 的构建按 §4.4 发布不带 `index` 的快照（`detail=insufficient_pairs`），该结果不算通过本条。
 3. 在桌面样本上，新配对结果与原 Kotlin 配对器逐字段一致，索引编译结果与原 `TranslationIndexCompiler` 一致（unique/terms/contextual 三类条目与冲突消解）。
 
     AppSealing 兼容注入的本地计划与运行时装在 `12-kernelsu-appsealing.md` 描述（`profile.appsealing` 计划、`guards` 复核、detach 兼容点、报告桥与站点补丁、失败回滚）；它只是实现说明，不作为实机通过证据。

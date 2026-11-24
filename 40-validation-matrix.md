@@ -55,6 +55,8 @@ L2/L3 通过时，逐条勾选：
 | 中文显示为方框 | `diagnostics.runtime.fontState` | TMP 字体注册或 `HasCharacter` 探测失败 |
 | 表未汉化 | `diagnostics.log` 的 `pairing` 计数 | 原文摘要未命中（加载器改变了字节表示），该表回退原文 |
 | JSON 表正常但散文/术语不汉化 | 进程日志 `snapshot rejected: snapshot_index_*`、`manifest.json` 的 `index` | 索引缺失或不一致；重建快照后重测 |
+| 任务成功但 `job.detail=insufficient_pairs` | 汉化包对原文表的覆盖比例、`manifest.json` 是否有 `index` | 配对覆盖率不足 90%，索引未激活，快照只提供 JSON 表查表；检查汉化包覆盖面后重建 |
+| `snapshot_index_invalid`（升级后首次启动） | `manifest.json` 的 `index.schema`/`bytes` 与进程日志理由；回执 `runtime/receipt.json` 的 `code=index_invalid`（receipt 的自由字符串码，**不在** `shared/status.h` 的协议码词表内） | 索引布局已变更为参考布局，旧快照的索引读不出；执行一次 `snapshot build` 重建 generation 后重测 |
 | `profileState=missing` | `build/` 日志与 APK 路径 | `pm path` 未取到 base.apk 或 ELF 解析失败 |
 | 任务失败且 `detail=qualification_*` | `job status` 的 `detail` | 设备/安装包不满足 SDK、arm64、PT_LOAD 对齐或官方签名资格 |
 
@@ -63,15 +65,18 @@ L2/L3 通过时，逐条勾选：
 - 游戏原文目录是否为 `<files>/Localize/<jp|en|kr>`，以及加载器是否改变 JSON 字节表示。
 - `/proc/self/fd/<n>` 是否被 TMP/TrueType 加载器接受为字体路径。
 - KernelSU 管理器 WebUI 的 `kernelsu.exec` 调用形态，以及 root 守护进程读取本地绝对路径的能力。
-- AppSealing 兼容注入已移植（JNI detach 兼容点、50048 报告桥、70034/50040 站点补丁、471 瞬时 50048 维护、SIGILL 守卫、双库补丁账本、`guards` 复核），实际检查时机与反应仍需设备观察；本地 CRC 比对与 `compatState=installed` 都不构成通过证据。
+- AppSealing 兼容注入已移植（JNI detach 兼容点、50048 报告桥、70034/50040 站点补丁、471 瞬时 50048 维护、SIGILL/SIGSEGV 守卫、双库补丁账本、`guards` 复核、`exactProfile` 重算比对），实际检查时机与反应仍需设备观察；本地 CRC 比对与 `compatState=installed` 都不构成通过证据。
 - 索引的实机行为：schema 9 二进制是否能被运行时完整读入、`index/index.bin` 的 64 MiB 上限在真实字典量级下是否够用、第三个描述符在 Unity 加载器压力下是否稳定，全部未测。
+- 装钩失败语义改为部分生效后，`hookState=installed` 不再代表全部钩子命中：它只表示 `LoadLocalizeFileSync`、`TextAsset.get_text` 与 `TMP_Text.set_text` 三个 trampoline 就绪，其余钩子是否安装只能看进程日志。
 
-## 7. 尚未接入、因此不在本矩阵考核范围的部分
+## 7. 已接入但仍未验证 / 明确排除的部分
 
-以下能力没有接进运行时，验证矩阵不为它们设通过标准，也不能把它们的缺失读成“该层失败”：
+已接入不等于通过。下列能力已经进入运行时或构建链，必须由 L0–L3 实机记录回答；本矩阵不为“代码存在”签发通过结论：
 
-- `font_proof.h`、`flow_text_proof.h`、`font_materials.h`、`font_scale.h`、`text_provenance.h`：TMP 材质/字号/多语言字体 setter、富文本与注音 Hook 均未安装。
-- 剧情/RPG/选项/通知只做通用字符串字段与参数翻译，原版 layout/flow/choice 状态机未移植。
-- `android_dlopen_ext` watcher 未实现，仍为 100 ms 轮询 `libil2cpp.so`。
-- coverage/source 备份/图标/更新链接等应用级管理未实现。
+- TMP 字体、共享材质、shader ratio、`TMProStringMatcher` 六类格式入口与三个 Ruby formatter 已安装；需验证真实组件签名命中率、材质复用、切换回原文后的恢复与页面重入。
+- 剧情/RPG/选项/通知已按 `text_policy` 显示字段白名单翻译，并保存/恢复 TMP wrapping/overflow；原版完整 layout/flow/choice 组件级证明状态机仍未逐项移植。
+- `android_dlopen_ext` watcher 已实现；需验证 Unity 是否始终经该入口加载 `libil2cpp.so`，以及 Hook 失败时的轮询兜底是否按预期工作。
+- SIGSEGV 守卫已实现；需验证 471 回溯器恢复、旧处理器链式调用与 AppSealing 重包裹在真实启动/切页/退出时的行为。
+- `exactProfile` 已由构建器生成并在解析/运行时两次比对；需确认游戏更新后计划字段变化会导致拒绝，而不是误装。
+- coverage/source 备份/图标/更新链接等应用级管理按设计排除，不在本矩阵考核范围。
 - 尚无 arm64 实机 L0–L3 记录：本文件任何一行都不能被引用为“已通过”。
