@@ -42,10 +42,10 @@
 
 ## 3. 仍未完成
 
-1. **移植头文件未接入**：`src/runtime/rich_text.h`、`font_proof.h`、`flow_text_proof.h`、`managed_state.h`、`font_materials.h`、`font_scale.h`、`text_provenance.h`、`method_flags.h` 为上游逐字节移植，已单独做 arm64 编译，但没有被任何 `.cpp` 引用，也不在 `build/build.ps1` 的编译单元列表中。TMP 材质、字号、多语言字体的 setter 与富文本/注音 Hook 因此都未安装。
+1. **移植头文件已参与编译**：`src/runtime/rich_text.h`、`font_proof.h`、`flow_text_proof.h`、`managed_state.h`、`font_materials.h`、`font_scale.h`、`text_provenance.h`、`method_flags.h` 由 `hooks.cpp` 引入并随模块编译；TMP 字体切换已接入，但材质、字号、多语言字体的 setter 与富文本/注音 Hook 仍未全部接入。
 2. **状态机未移植**：剧情、RPG、选项、通知只做通用字符串字段与参数翻译；原版的 layout/flow/choice 状态机（`flow_text_proof`、`text_provenance` 所依赖的组件级证明）没有接入。
 3. **`android_dlopen_ext` watcher 未实现**：仍按 100 ms 轮询 `resolve_il2cpp`（上限 900 次）与类可用性（上限 600 次）。
-4. **SIGSEGV 守卫未实现**：评估结论是它服务于 VirtualApp `MapsRedirector` 的误报防护，本模块没有该路径，因此不移植。
+4. **SIGSEGV 守卫已移植**：`src/runtime/sigsegv_guard.cpp` 安装 SIGSEGV 包装器，包含 471 回溯器恢复分支、旧处理器链式调用、上下文变化检测与 AppSealing 覆盖后的重包裹；`profile.appsealing.sigsegv` 由 471 结构家族生成。尚无 arm64 实机验证。
 5. **应用级管理未实现**：coverage、source 备份、图标、更新链接等不在范围。
 6. **AI/容器/自更新/计费/迁移未实现**：设计已排除。
 7. **索引的字段使用范围**：`profile.appsealing.exactProfile` 会被序列化与解析校验，但 `bybusd` 不写入、运行时也不比对；`index_invalid` 与 `font_component_rejected` 只有 WebUI 文案，尚无产生点。

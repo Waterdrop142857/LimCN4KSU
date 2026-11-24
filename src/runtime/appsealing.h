@@ -25,5 +25,6 @@ void set_java_vm(JavaVM *vm);
 bool install_appsealing_compat(std::string *error);
 void maintain_appsealing_compat();
 uint64_t compat_maintain_count();
+uintptr_t appsealing_protection_base();
 
 } // namespace bybus::runtime

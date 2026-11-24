@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "runtime/owned_code.h"
+#include "runtime/sigsegv_policy.h"
 #include "runtime/translation_index.h"
 #include "shared/json.h"
 #include "shared/sha256.h"
@@ -465,6 +466,38 @@ void test_translation_index_roundtrip() {
     check(!rejected.load(corrupt, &error), "index: magic mismatch rejected");
 }
 
+void test_sigsegv_policy() {
+    using namespace bybus;
+    translation::AppSealingSigsegv plan;
+    plan.present = true;
+    plan.pc_offset = 0x145820;
+    plan.lr_offset = 0x14580c;
+    plan.recovery_offset = 0x1457ec;
+    plan.x1_expected = 0xd2801168;
+    plan.pattern = {0xaa0003f9, 0x72ba5001, 0xb9400002, 0x6b01005f, 0x528000a0};
+    const uintptr_t base = 0x7000000000ull;
+    runtime::SigsegvFrame frame;
+    frame.pc = base + plan.pc_offset;
+    frame.lr = base + plan.pc_offset - 0x14;
+    frame.x0 = 0x1234;
+    frame.x1 = plan.x1_expected;
+    frame.minus_5 = plan.pattern[0];
+    frame.minus_1 = plan.pattern[1];
+    frame.at_0 = plan.pattern[2];
+    frame.at_1 = plan.pattern[3];
+    frame.minus_0x34 = plan.pattern[4];
+    uintptr_t recovery = 0;
+    check(runtime::should_recover_471(plan, base, frame, frame.x0, &recovery) &&
+              recovery == base + plan.recovery_offset,
+          "sigsegv: verified 471 unwind site recovers");
+    frame.minus_5 = 0;
+    check(!runtime::should_recover_471(plan, base, frame, frame.x0, &recovery),
+          "sigsegv: instruction mismatch does not recover");
+    frame.minus_5 = plan.pattern[0];
+    check(!runtime::should_recover_471(plan, base, frame, frame.x0 + 4, &recovery),
+          "sigsegv: fault address mismatch does not recover");
+}
+
 bybus::translation::AppSealingPlan sample_plan() {
     using bybus::translation::AppSealingHookPoint;
     using bybus::translation::AppSealingPlan;
@@ -627,6 +660,7 @@ int main() {
     test_appsealing_helpers();
     test_owned_code_ledger();
     test_translation_index_roundtrip();
+    test_sigsegv_policy();
     test_appsealing_manifest();
     if (g_failures != 0) {
         std::printf("%d check(s) failed\n", g_failures);

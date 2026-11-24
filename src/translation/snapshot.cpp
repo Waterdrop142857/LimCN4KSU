@@ -168,6 +168,16 @@ shared::JsonPtr serialize_appsealing(const AppSealingPlan &plan) {
     }
     root->put_string("exactProfile", plan.exact_profile);
     root->put_bool("reportStable", plan.report_stable);
+    shared::JsonPtr sigsegv = root->put_object("sigsegv");
+    sigsegv->put_bool("present", plan.sigsegv.present);
+    sigsegv->put_int("pcOffset", static_cast<int64_t>(plan.sigsegv.pc_offset));
+    sigsegv->put_int("lrOffset", static_cast<int64_t>(plan.sigsegv.lr_offset));
+    sigsegv->put_int("recoveryOffset", static_cast<int64_t>(plan.sigsegv.recovery_offset));
+    sigsegv->put_int("x1Expected", static_cast<int64_t>(plan.sigsegv.x1_expected));
+    shared::JsonPtr sigsegv_pattern = sigsegv->put_array("pattern");
+    for (const uint32_t word : plan.sigsegv.pattern) {
+        sigsegv_pattern->append(shared::Json::integer(static_cast<int64_t>(word)));
+    }
     return root;
 }
 
@@ -475,6 +485,24 @@ bool parse_appsealing(const shared::JsonPtr &root, AppSealingPlan *out, std::str
     const shared::JsonPtr stable = root->opt("reportStable");
     plan.report_stable = plan.report.present;
     if (stable && stable->is_bool()) plan.report_stable = stable->as_bool();
+    const shared::JsonPtr sigsegv = root->opt("sigsegv");
+    if (sigsegv && sigsegv->is_object()) {
+        const shared::JsonPtr present = sigsegv->opt("present");
+        plan.sigsegv.present = present && present->is_bool() && present->as_bool();
+        if (plan.sigsegv.present) {
+            if (!uint_field(sigsegv, "pcOffset", plan.module_size, &plan.sigsegv.pc_offset) ||
+                !uint_field(sigsegv, "lrOffset", plan.module_size,
+                            &plan.sigsegv.lr_offset) ||
+                !uint_field(sigsegv, "recoveryOffset", plan.module_size,
+                            &plan.sigsegv.recovery_offset) ||
+                !word_field(sigsegv, "x1Expected", &plan.sigsegv.x1_expected) ||
+                !read_words(sigsegv->opt("pattern"), &plan.sigsegv.pattern) ||
+                plan.sigsegv.pattern.size() != 5) {
+                *error = "manifest_appsealing_sigsegv";
+                return false;
+            }
+        }
+    }
 
     plan.present = true;
     *out = std::move(plan);

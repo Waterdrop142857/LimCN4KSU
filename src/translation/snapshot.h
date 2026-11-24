@@ -99,6 +99,15 @@ struct AppSealingGuard {
     uint32_t expected = 0;
 };
 
+struct AppSealingSigsegv {
+    bool present = false;
+    uint64_t pc_offset = 0;
+    uint64_t lr_offset = 0;
+    uint64_t recovery_offset = 0;
+    uint32_t x1_expected = 0;
+    std::vector<uint32_t> pattern;
+};
+
 // Local compatibility plan for libcovault-appsec.so. Absent means the runtime
 // must not install any protection-related patch.
 struct AppSealingPlan {
@@ -127,6 +136,7 @@ struct AppSealingPlan {
     bool report_stable = false;
     AppSealingStack stack;
     AppSealingTransient transient;
+    AppSealingSigsegv sigsegv;
 };
 
 // AppSealing layout of the installed build, computed locally by bybusd from the

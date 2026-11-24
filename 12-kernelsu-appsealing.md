@@ -32,7 +32,7 @@
 | --- | --- | --- |
 | L0 | 不注入 | 设备基线：Root + 官方 APK 可正常游玩 |
 | L1 | 空 Zygisk 模块（不 Hook、不读快照） | 必须到达标题页，否则本模块在该版本上不可用 |
-| L2 | 先按快照 `profile.appsealing` 安装 AppSealing 兼容（JNI detach 兼容点、50048 报告桥、70034/50040 站点补丁、471 瞬时 50048 维护、SIGILL 守卫），再 Hook `TextAssetPatchManager.LoadLocalizeFileSync`、`UnityEngine.TextAsset.get_text`、TMP `set_text`/`set_text_string`、`BattleUI.Announcer.SetDescription`、`StorySystem.Dialog..ctor`、`RPGSystem.RpgLocText_Dialogue.GetTextData`、`ChoiceScrollViewBox.SetText`、`NoticeUIContentText.SetData`、`ActionChoiceButton.SetButtonData`；字体 API 可用时还 Hook `UnityEngine.UI.Text.set_text` | 声明了保护库的版本须 `runtime.compatState=installed`（无保护库时为 `none`），且 `runtime.hookState=installed`；文本 Hook 只做读后 JSON 替换、索引查表与字体选择，不触碰资源文件描述符、下载、存档 |
+| L2 | 先按快照 `profile.appsealing` 安装 AppSealing 兼容（JNI detach 兼容点、50048 报告桥、70034/50040 站点补丁、471 瞬时 50048 维护、SIGILL 守卫、SIGSEGV 守卫），再 Hook `TextAssetPatchManager.LoadLocalizeFileSync`、`UnityEngine.TextAsset.get_text`、TMP `set_text`/`set_text_string`、`BattleUI.Announcer.SetDescription`、`StorySystem.Dialog..ctor`、`RPGSystem.RpgLocText_Dialogue.GetTextData`、`ChoiceScrollViewBox.SetText`、`NoticeUIContentText.SetData`、`ActionChoiceButton.SetButtonData`；字体 API 可用时还 Hook `UnityEngine.UI.Text.set_text` | 声明了保护库的版本须 `runtime.compatState=installed`（无保护库时为 `none`），且 `runtime.hookState=installed`；文本 Hook 只做读后 JSON 替换、索引查表与字体选择，不触碰资源文件描述符、下载、存档 |
 | L3 | 完整性结果观察 | 在 L2 后记录安全提示、退出和重复下载；报告桥与站点补丁已移植，`compatState` 须保持 `installed`，且没有 50048/70034/50040 上报 |
 
 **安装顺序**（`src/runtime/appsealing.cpp` 的 `install_appsealing_compat`，在 `zygisk_module.cpp` 的监控线程里先于任何文本 Hook）：
@@ -93,12 +93,12 @@ Zygisk companion 为最近一次游戏启动维护一条 receipt（`/data/adb/by
 
 ## 6. 尚未接入的部分
 
-以下在 `src/runtime/` 里已有移植代码，但没有接进任何 Hook，因此对 AppSealing 的观察面没有影响，也不构成兼容性证据：
+以下在 `src/runtime/` 里已有移植代码，但没有全部接进 Hook；它们不构成兼容性证据：
 
-- `font_proof.h`、`flow_text_proof.h`、`font_materials.h`、`font_scale.h`、`text_provenance.h` 未接入；TMP 材质、字号、多语言字体的 setter 与富文本/注音 Hook 都未安装。
-- 剧情/RPG/选项/通知只做了通用字符串字段与参数翻译，原版的 layout/flow/choice 状态机没有移植。
+- `font_proof.h`、`flow_text_proof.h`、`font_materials.h`、`font_scale.h`、`text_provenance.h` 已随 `hooks.cpp` 编译，TMP 字体切换已接入；材质、字号、多语言字体 setter 与富文本/注音 Hook 仍未全部接入。
+- 剧情/RPG/选项/通知只做了通用字符串字段与参数翻译，原版的 layout/flow/choice 状态机没有完整移植。
 - `android_dlopen_ext` watcher 未实现，仍按 100 ms 间隔轮询 `libil2cpp.so` 是否可解析。
-- SIGSEGV 守卫未实现：上游用它兜住 VirtualApp `MapsRedirector` 造成的误报，本模块没有该路径。
+- SIGSEGV 守卫已移植到 `src/runtime/sigsegv_guard.cpp`：471 回溯器恢复、旧处理器链式调用、上下文变化检测与重包裹都在；尚无 arm64 实机验证。
 - 应用级管理（coverage、source 备份、图标、更新链接）不在本模块范围。
 - 尚无 arm64 实机 L0–L3 记录；以上任何一条都不能被读成“已通过保护检查”。
 

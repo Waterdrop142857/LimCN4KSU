@@ -16,6 +16,12 @@
 #include <vector>
 
 #include "CydiaSubstrate.h"
+#include "runtime/flow_text_proof.h"
+#include "runtime/font_materials.h"
+#include "runtime/font_proof.h"
+#include "runtime/font_scale.h"
+#include "runtime/rich_text.h"
+#include "runtime/text_provenance.h"
 #include "runtime/il2cpp.h"
 #include "runtime/log.h"
 #include "runtime/state.h"
@@ -52,6 +58,8 @@ rpg_dialogue_text_fn g_original_rpg_dialogue_text = nullptr;
 choice_set_text_fn g_original_choice_set_text = nullptr;
 notice_set_data_fn g_original_notice_set_data = nullptr;
 choice_button_fn g_original_choice_button = nullptr;
+void *g_tmp_font_asset = nullptr;
+const void *g_tmp_set_font_method = nullptr;
 void *g_text_asset_class = nullptr;
 void *g_legacy_font = nullptr;
 void *g_legacy_font_handle = nullptr;
@@ -181,6 +189,17 @@ void *translate_text(const std::string &resource_key, void *original) {
     }
     runtime.hits.fetch_add(1);
     return replacement;
+}
+
+bool apply_tmp_font(void *instance) {
+    if (!instance || !g_tmp_font_asset || !g_tmp_set_font_method) return false;
+    void *target = nullptr;
+    ::memcpy(&target, g_tmp_set_font_method, sizeof(target));
+    if (!target) return false;
+    typedef void (*set_font_fn)(void *, void *, const void *);
+    auto setter = reinterpret_cast<set_font_fn>(target);
+    setter(instance, g_tmp_font_asset, g_tmp_set_font_method);
+    return true;
 }
 
 void translate_object_strings(void *instance) {
@@ -345,21 +364,29 @@ void replacement_ui_set_text(void *instance, void *managed_text, const void *met
 
 void replacement_tmp_set_text(void *instance, void *managed_text, const void *method) {
     RuntimeState &runtime = state();
+    bool changed = false;
     if (instance && managed_text && runtime.enabled.load()) {
-        managed_text = translate_managed_string(managed_text, nullptr, nullptr, nullptr);
+        void *translated = translate_managed_string(managed_text, nullptr, nullptr, nullptr);
+        changed = translated != managed_text;
+        managed_text = translated;
     }
     if (g_original_tmp_set_text) g_original_tmp_set_text(instance, managed_text, method);
+    if (changed) apply_tmp_font(instance);
 }
 
 void replacement_tmp_set_text_string(void *instance, void *managed_text, bool sync_input,
                                      const void *method) {
     RuntimeState &runtime = state();
+    bool changed = false;
     if (instance && managed_text && runtime.enabled.load()) {
-        managed_text = translate_managed_string(managed_text, nullptr, nullptr, nullptr);
+        void *translated = translate_managed_string(managed_text, nullptr, nullptr, nullptr);
+        changed = translated != managed_text;
+        managed_text = translated;
     }
     if (g_original_tmp_set_text_string) {
         g_original_tmp_set_text_string(instance, managed_text, sync_input, method);
     }
+    if (changed) apply_tmp_font(instance);
 }
 
 void replacement_announcer_set_description(void *instance, void *managed_text,
@@ -459,6 +486,9 @@ bool install_text_hooks() {
     void *tmp_text = find_class(runtime.api, "TMPro", "TMP_Text");
     const MethodSpec tmp_spec{"set_text", "System.String", "System.Void", false};
     const void *tmp_method = tmp_text ? find_verified_method(runtime.api, tmp_text, tmp_spec) : nullptr;
+    const MethodSpec tmp_font_spec{"set_font", "TMPro.TMP_FontAsset", "System.Void", false};
+    g_tmp_set_font_method =
+        tmp_text ? find_verified_method(runtime.api, tmp_text, tmp_font_spec) : nullptr;
     if (tmp_method) {
         if (!hook_method(runtime, tmp_method, reinterpret_cast<void *>(replacement_tmp_set_text),
                          reinterpret_cast<void **>(&g_original_tmp_set_text))) {
@@ -804,6 +834,7 @@ bool prepare_font() {
     g_font_handle = handle;
     g_legacy_font = legacy;
     g_legacy_font_handle = legacy_handle;
+    g_tmp_font_asset = asset;
     g_unity_main_thread = runtime.main_thread;
     pthread_mutex_unlock(&g_font_mutex);
     log_info("TMP Chinese font registered");

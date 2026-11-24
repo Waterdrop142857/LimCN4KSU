@@ -73,6 +73,5 @@ L2/L3 通过时，逐条勾选：
 - `font_proof.h`、`flow_text_proof.h`、`font_materials.h`、`font_scale.h`、`text_provenance.h`：TMP 材质/字号/多语言字体 setter、富文本与注音 Hook 均未安装。
 - 剧情/RPG/选项/通知只做通用字符串字段与参数翻译，原版 layout/flow/choice 状态机未移植。
 - `android_dlopen_ext` watcher 未实现，仍为 100 ms 轮询 `libil2cpp.so`。
-- SIGSEGV 守卫未实现（评估为 VirtualApp `MapsRedirector` 误报防护，本模块无该路径）。
 - coverage/source 备份/图标/更新链接等应用级管理未实现。
 - 尚无 arm64 实机 L0–L3 记录：本文件任何一行都不能被引用为“已通过”。

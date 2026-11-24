@@ -64,7 +64,8 @@ $translationService = @(
 $runtimeSources = @(
     'src/runtime/log.cpp', 'src/runtime/companion.cpp', 'src/runtime/snapshot_reader.cpp',
     'src/runtime/il2cpp.cpp', 'src/runtime/integrity.cpp', 'src/runtime/state.cpp',
-    'src/runtime/appsealing.cpp', 'src/runtime/translation_index.cpp',
+    'src/runtime/appsealing.cpp', 'src/runtime/sigsegv_guard.cpp',
+    'src/runtime/translation_index.cpp',
     'src/runtime/text_router.cpp', 'src/runtime/hooks.cpp', 'src/runtime/zygisk_module.cpp'
 )
 $substrateSources = @(

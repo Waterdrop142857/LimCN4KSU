@@ -397,6 +397,13 @@ bool qualify_protection(const std::string &bytes, int64_t version_code, AppSeali
         plan->transient.branch_word = branch_word(transient.vaddr, transient.target_vaddr);
         plan->transient.sigill_pc_vaddr = 0x4e564;
         plan->transient.sigill_lr_vaddr = 0x4e550;
+        plan->sigsegv.present = true;
+        plan->sigsegv.pc_offset = 0x145820;
+        plan->sigsegv.lr_offset = 0x14580c;
+        plan->sigsegv.recovery_offset = 0x1457ec;
+        plan->sigsegv.x1_expected = 0xd2801168;
+        plan->sigsegv.pattern = {0xaa0003f9, 0x72ba5001, 0xb9400002, 0x6b01005f,
+                                 0x528000a0};
         if (plan->transient.branch_word == 0) {
             *error = "appsealing_branch_range";
             return false;

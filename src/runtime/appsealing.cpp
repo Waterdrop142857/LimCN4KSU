@@ -21,6 +21,7 @@
 #include "CydiaSubstrate.h"
 #include "runtime/integrity.h"
 #include "runtime/log.h"
+#include "runtime/sigsegv_guard.h"
 #include "runtime/state.h"
 #include "translation/snapshot.h"
 
@@ -709,34 +710,47 @@ bool install_appsealing_compat(std::string *error) {
         }
     }
     install_sigill_guard();
+    if (!install_sigsegv_guard()) {
+        (void)state().ledger.restore_module(base);
+        g_original_detach = nullptr;
+        g_original_report = nullptr;
+        g_protection_base = 0;
+        return fail("appsealing_sigsegv");
+    }
     g_state.store(CompatState::Installed);
     log_info("AppSealing compatibility installed");
     return true;
 }
 
 void maintain_appsealing_compat() {
-    if (g_state.load() != CompatState::Installed || !plan_state().present || !plan_state().transient.present ||
+    if (g_state.load() != CompatState::Installed || !plan_state().present ||
         !g_protection_base) {
         return;
     }
-    uint32_t word = 0;
-    if (!read_word(g_protection_base, plan_state().transient.vaddr, &word)) return;
-    if (word != plan_state().transient.branch_word) {
-        const uintptr_t address =
-            g_protection_base + static_cast<uintptr_t>(plan_state().transient.vaddr);
-        if (set_writable(address, sizeof(uint32_t), true)) {
-            std::memcpy(reinterpret_cast<void *>(address), &plan_state().transient.branch_word,
-                        sizeof(plan_state().transient.branch_word));
-            __builtin___clear_cache(reinterpret_cast<char *>(address),
-                                    reinterpret_cast<char *>(address + sizeof(uint32_t)));
-            (void)set_writable(address, sizeof(uint32_t), false);
-            g_maintains.fetch_add(1);
+    if (plan_state().transient.present) {
+        uint32_t word = 0;
+        if (read_word(g_protection_base, plan_state().transient.vaddr, &word) &&
+            word != plan_state().transient.branch_word) {
+            const uintptr_t address =
+                g_protection_base + static_cast<uintptr_t>(plan_state().transient.vaddr);
+            if (set_writable(address, sizeof(uint32_t), true)) {
+                std::memcpy(reinterpret_cast<void *>(address),
+                            &plan_state().transient.branch_word,
+                            sizeof(plan_state().transient.branch_word));
+                __builtin___clear_cache(reinterpret_cast<char *>(address),
+                                        reinterpret_cast<char *>(address + sizeof(uint32_t)));
+                (void)set_writable(address, sizeof(uint32_t), false);
+                g_maintains.fetch_add(1);
+            }
         }
+        maintain_sigill_guard();
     }
-    maintain_sigill_guard();
+    maintain_sigsegv_guard();
 }
 
 uint64_t compat_maintain_count() { return g_maintains.load(); }
+
+uintptr_t appsealing_protection_base() { return g_protection_base; }
 
 } // namespace bybus::runtime
 
