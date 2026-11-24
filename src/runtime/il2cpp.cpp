@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "runtime/log.h"
+#include "runtime/type_signature.h"
 #include "shared/utf.h"
 
 namespace bybus::runtime {
@@ -72,6 +73,9 @@ bool resolve_il2cpp(Il2CppApi *api) {
               bind(handle, "il2cpp_method_get_param_count", &resolved.method_get_param_count) &&
               bind(handle, "il2cpp_method_get_param", &resolved.method_get_param) &&
               bind(handle, "il2cpp_method_get_return_type", &resolved.method_get_return_type) &&
+              bind(handle, "il2cpp_method_get_class", &resolved.method_get_class) &&
+              bind(handle, "il2cpp_method_is_generic", &resolved.method_is_generic) &&
+              bind(handle, "il2cpp_method_get_flags", &resolved.method_get_flags) &&
               bind(handle, "il2cpp_type_get_name", &resolved.type_get_name) &&
               bind(handle, "il2cpp_free", &resolved.free_memory) &&
               bind(handle, "il2cpp_string_length", &resolved.string_length) &&
@@ -93,6 +97,9 @@ bool resolve_il2cpp(Il2CppApi *api) {
               bind(handle, "il2cpp_class_get_parent", &resolved.class_get_parent);
     if (ok) {
         bind_optional(handle, "il2cpp_class_get_fields", &resolved.class_get_fields);
+        bind_optional(handle, "il2cpp_array_length", &resolved.array_length);
+        bind_optional(handle, "il2cpp_array_get", &resolved.array_get);
+        bind_optional(handle, "il2cpp_array_set", &resolved.array_set);
         bind_optional(handle, "il2cpp_class_get_name", &resolved.class_get_name);
         bind_optional(handle, "il2cpp_class_get_namespace", &resolved.class_get_namespace);
         bind_optional(handle, "il2cpp_class_is_enum", &resolved.class_is_enum);
@@ -105,9 +112,6 @@ bool resolve_il2cpp(Il2CppApi *api) {
         bind_optional(handle, "il2cpp_field_set_value", &resolved.field_set_value);
         bind_optional(handle, "il2cpp_field_static_get_value",
                       &resolved.field_static_get_value);
-        bind_optional(handle, "il2cpp_method_get_class", &resolved.method_get_class);
-        bind_optional(handle, "il2cpp_method_is_generic", &resolved.method_is_generic);
-        bind_optional(handle, "il2cpp_method_get_flags", &resolved.method_get_flags);
     }
     if (!ok) {
         ::dlclose(handle);
@@ -162,7 +166,10 @@ const void *find_method(const Il2CppApi &api, void *klass, const char *name,
         if (api.method_get_param_count(method) != param_count) continue;
         if (return_type != nullptr) {
             const std::string actual = type_name_of(api, api.method_get_return_type(method));
-            if (actual != return_type) continue;
+            if (type_signature::normalize(actual.c_str()) !=
+                type_signature::normalize(return_type)) {
+                continue;
+            }
         }
         return method;
     }
@@ -171,32 +178,24 @@ const void *find_method(const Il2CppApi &api, void *klass, const char *name,
 
 namespace {
 
-std::vector<std::string> split_parameters(const char *text) {
-    std::vector<std::string> result;
-    if (!text || !*text) return result;
-    std::string token;
-    for (const char *cursor = text;; ++cursor) {
-        if (*cursor == ',' || *cursor == '\0') {
-            size_t begin = 0;
-            while (begin < token.size() && token[begin] == ' ') ++begin;
-            size_t end = token.size();
-            while (end > begin && token[end - 1] == ' ') --end;
-            result.push_back(token.substr(begin, end - begin));
-            token.clear();
-            if (*cursor == '\0') break;
-        } else {
-            token.push_back(*cursor);
-        }
-    }
-    return result;
-}
-
 bool method_is_instance(const Il2CppApi &api, const void *method, bool *is_static) {
     if (!api.method_get_flags || !method) return false;
     uint32_t implementation = 0;
     const uint32_t flags = api.method_get_flags(method, &implementation);
     *is_static = (flags & 0x0010u) != 0;
     return true;
+}
+
+// Concatenates the parameter types the runtime reports, exactly as the
+// reference did, so one whole-string comparison covers overload resolution.
+std::string joined_parameters(const Il2CppApi &api, const void *method, uint32_t count) {
+    std::string signature;
+    for (uint32_t index = 0; index < count; ++index) {
+        if (index != 0) signature.push_back(',');
+        signature += type_signature::normalize(
+            type_name_of(api, api.method_get_param(method, index)).c_str());
+    }
+    return signature;
 }
 
 } // namespace
@@ -208,7 +207,15 @@ const void *find_verified_method(const Il2CppApi &api, void *klass, const Method
         !api.method_get_class || !api.method_is_generic || !api.method_get_flags) {
         return nullptr;
     }
-    const std::vector<std::string> parameters = split_parameters(spec.parameters);
+    std::vector<std::string> expected;
+    if (!type_signature::split(spec.parameters, &expected)) return nullptr;
+    std::string expected_parameters;
+    for (size_t index = 0; index < expected.size(); ++index) {
+        if (index != 0) expected_parameters.push_back(',');
+        expected_parameters += expected[index];
+    }
+    const std::string expected_return =
+        spec.returns != nullptr ? type_signature::normalize(spec.returns) : std::string();
     void *iterator = nullptr;
     while (const void *method = api.class_get_methods(klass, &iterator)) {
         if (!method) break;
@@ -219,21 +226,13 @@ const void *find_verified_method(const Il2CppApi &api, void *klass, const Method
         if (api.method_get_class(method) != klass || api.method_is_generic(method)) continue;
         bool is_static = false;
         if (!method_is_instance(api, method, &is_static) || is_static != spec.is_static) continue;
-        if (static_cast<size_t>(api.method_get_param_count(method)) != parameters.size()) continue;
+        const uint32_t parameter_count = api.method_get_param_count(method);
+        if (static_cast<size_t>(parameter_count) != expected.size()) continue;
         if (spec.returns != nullptr) {
             const std::string actual = type_name_of(api, api.method_get_return_type(method));
-            if (actual != spec.returns) continue;
+            if (type_signature::normalize(actual.c_str()) != expected_return) continue;
         }
-        bool matches = true;
-        for (size_t index = 0; index < parameters.size(); ++index) {
-            const std::string actual =
-                type_name_of(api, api.method_get_param(method, static_cast<uint32_t>(index)));
-            if (actual != parameters[index]) {
-                matches = false;
-                break;
-            }
-        }
-        if (matches) return method;
+        if (joined_parameters(api, method, parameter_count) == expected_parameters) return method;
     }
     return nullptr;
 }

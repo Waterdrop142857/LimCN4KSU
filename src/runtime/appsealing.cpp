@@ -653,6 +653,15 @@ bool install_appsealing_compat(std::string *error) {
     if (current == CompatState::Rejected) return fail("appsealing_rejected");
     const translation::AppSealingPlan &plan = state().reader.profile().appsealing;
     if (!plan.present) return fail("appsealing_plan_missing");
+    // parse_manifest already required a non-empty exact profile. Recompute it
+    // here as defence in depth: every structural field the runtime is about to
+    // patch must still produce the same digest before any write.
+    {
+        const std::string computed = translation::appsealing_exact_profile(plan);
+        if (computed.size() != 64 || computed != plan.exact_profile) {
+            return fail("appsealing_exact_mismatch");
+        }
+    }
     plan_state() = plan;
     g_ranges_fingerprint = parse_hex64(plan_state().ranges_fingerprint);
     if (g_ranges_fingerprint == 0) {

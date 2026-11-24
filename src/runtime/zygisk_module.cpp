@@ -15,6 +15,7 @@
 #include "runtime/companion.h"
 #include "runtime/hooks.h"
 #include "runtime/il2cpp.h"
+#include "runtime/library_watch.h"
 #include "runtime/log.h"
 #include "runtime/state.h"
 
@@ -41,7 +42,16 @@ void *monitor_main(void *) {
         return nullptr;
     }
     bool resolved = false;
-    for (int attempt = 0; attempt < kIl2CppPollAttempts; ++attempt) {
+    // android_dlopen_ext is the linker entry Unity uses for libil2cpp. Waiting on
+    // that event removes the 100 ms wakeups; the bounded loop remains only as a
+    // fallback for a player that loads the library by another path.
+    bybus::runtime::LibraryWatch *watch =
+        bybus::runtime::start_library_watch("libil2cpp.so");
+    if (watch && bybus::runtime::library_watch_hooked(watch)) {
+        bybus::runtime::wait_for_library(watch, kIl2CppPollAttempts * 100);
+        resolved = bybus::runtime::resolve_il2cpp(&runtime.api);
+    }
+    for (int attempt = 0; !resolved && attempt < kIl2CppPollAttempts; ++attempt) {
         if (bybus::runtime::resolve_il2cpp(&runtime.api)) {
             resolved = true;
             break;
@@ -84,7 +94,8 @@ void *monitor_main(void *) {
     // Verify and read published tables off the Unity callback thread. A table
     // that cannot be prewarmed still uses the checked on-demand lookup path.
     runtime.reader.prewarm_tables();
-    if (!bybus::runtime::install_text_hooks()) {
+    if (!bybus::runtime::install_text_hooks() || !bybus::runtime::text_entry_installed()) {
+        bybus::runtime::log_warn("entry hooks unavailable");
         bybus::runtime::write_receipt("rejected", "none", "unsupported_runtime");
         return nullptr;
     }
@@ -142,7 +153,11 @@ public:
     void postAppSpecialize(const zygisk::AppSpecializeArgs *) override {
         if (!target_ || companion_fd_ < 0) return;
         bybus::runtime::RuntimeState &runtime = bybus::runtime::state();
-        if (!runtime.client.connect(companion_fd_)) return;
+        if (!runtime.client.connect(companion_fd_)) {
+            ::close(companion_fd_);
+            companion_fd_ = -1;
+            return;
+        }
         bybus::runtime::HelloInfo hello;
         if (!runtime.client.hello(&hello)) {
             bybus::runtime::log_warn("snapshot handles unavailable");
@@ -154,13 +169,17 @@ public:
             bybus::runtime::log_warn("generation degraded, hooks skipped");
             if (hello.manifest_fd >= 0) ::close(hello.manifest_fd);
             if (hello.font_fd >= 0) ::close(hello.font_fd);
+            if (hello.index_fd >= 0) ::close(hello.index_fd);
             bybus::runtime::write_receipt("rejected", "none", "unsupported_runtime");
             return;
         }
         std::string error;
         if (!runtime.reader.open(&runtime.client, hello, &error)) {
             bybus::runtime::log_warn("snapshot rejected: %s", error.c_str());
-            bybus::runtime::write_receipt("rejected", "none", "snapshot_invalid");
+            const char *code = error == "snapshot_index_invalid" || error == "snapshot_index_missing"
+                                   ? "index_invalid"
+                                   : "snapshot_invalid";
+            bybus::runtime::write_receipt("rejected", "none", code);
             return;
         }
         const bybus::translation::SnapshotProfile &profile = runtime.reader.profile();

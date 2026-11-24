@@ -48,6 +48,9 @@ struct Il2CppApi {
     void *(*thread_attach)(void *) = nullptr;
     void (*thread_detach)(void *) = nullptr;
     void *(*runtime_invoke)(const void *, void *, void **, void **) = nullptr;
+    uint32_t (*array_length)(void *) = nullptr;
+    void *(*array_get)(void *, uint32_t) = nullptr;
+    void (*array_set)(void *, uint32_t, void *) = nullptr;
     void *(*object_unbox)(void *) = nullptr;
     void *(*object_get_class)(void *) = nullptr;
     void *(*object_new)(void *) = nullptr;
@@ -89,7 +92,9 @@ const void *find_method(const Il2CppApi &api, void *klass, const char *name,
                         const char *return_type, uint32_t param_count);
 
 // Strictly verified overload: declaring class, parameter types, return type,
-// generic status and static/instance flags must all match.
+// generic status and static/instance flags must all match. The parameter list is
+// split at generic depth 0 and every type name is normalized (see
+// type_signature.h), so both IL2CPP spellings of a generic or nested type match.
 struct MethodSpec {
     const char *name = nullptr;
     const char *parameters = "";  // comma-separated IL2CPP type names

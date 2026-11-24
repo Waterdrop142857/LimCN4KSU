@@ -18,4 +18,9 @@ bool translate_text_value(const std::string &source, const char *resource_hint,
                           const char *context_id, const char *field,
                           std::string *translated);
 
+// True when this exact managed string was produced by translate_managed_string
+// and is still in the bounded recent-output ledger. Font selection uses this as
+// provenance instead of assuming every Han glyph is a translated label.
+bool was_translated_text(void *managed);
+
 } // namespace bybus::runtime

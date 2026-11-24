@@ -1,10 +1,12 @@
 #include "runtime/text_router.h"
 
 #include <cstddef>
+#include <mutex>
 #include <string>
 #include <utility>
 
 #include "runtime/il2cpp.h"
+#include "runtime/managed_state.h"
 #include "runtime/state.h"
 #include "runtime/translation_index.h"
 #include "runtime/ui_labels.h"
@@ -14,6 +16,8 @@ namespace bybus::runtime {
 namespace {
 
 thread_local int g_router_depth = 0;
+std::mutex g_output_mutex;
+limbus_managed::RecentOutputs g_translated_outputs;
 
 struct RouterScope {
     RouterScope() { ++g_router_depth; }
@@ -90,7 +94,21 @@ void *translate_managed_string(void *managed, const char *resource_hint,
         return managed;
     }
     void *replacement = managed_string_from_utf8(runtime.api, translated);
-    return replacement ? replacement : managed;
+    if (!replacement) return managed;
+    {
+        std::lock_guard<std::mutex> lock(g_output_mutex);
+        g_translated_outputs.add(translated);
+    }
+    return replacement;
+}
+
+bool was_translated_text(void *managed) {
+    RuntimeState &runtime = state();
+    if (!managed || !runtime.api.ready()) return false;
+    std::string text;
+    if (!managed_string_to_utf8(runtime.api, managed, &text)) return false;
+    std::lock_guard<std::mutex> lock(g_output_mutex);
+    return g_translated_outputs.contains(text);
 }
 
 } // namespace bybus::runtime

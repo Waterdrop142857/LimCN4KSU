@@ -1,4 +1,4 @@
-// Installs the two read-after-load text hooks and owns their replacements.
+// Installs the read-after-load text hooks and owns their replacements.
 // Only localization read paths are touched; resource descriptors, downloads and
 // save data are never redirected.
 #pragma once
@@ -6,8 +6,10 @@
 namespace bybus::runtime {
 
 // Resolves classes/methods, records the patch in the ledger, installs the hooks
-// and verifies the integrity profile. Rolls back and returns false on any
-// mismatch, leaving the process unpatched.
+// and records an integrity audit. Returns whether the entry hooks are ready:
+// LoadLocalizeFileSync, TextAsset.get_text and TMP_Text.set_text must all own a
+// trampoline. An optional hook that fails is only logged and never rolls the
+// rest back; text_entry_installed() reports the same state.
 bool install_text_hooks();
 
 // Hash the snapshot font on the monitor thread before any text callback can

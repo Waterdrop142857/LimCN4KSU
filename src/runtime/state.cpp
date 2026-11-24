@@ -64,9 +64,14 @@ void *updater_main(void *) {
         if (++ticks < 5) continue;
         ticks = 0;
         RuntimeState &runtime = state();
+        const char *font_code = runtime.font_ready.load()
+                                    ? "ok"
+                                    : runtime.font_component_rejected.load()
+                                          ? "font_component_rejected"
+                                          : "font_invalid";
         runtime.client.send_receipt(receipt_json(runtime.hooks_installed.load() ? "installed" : "none",
                                                  runtime.font_ready.load() ? "ready" : "none",
-                                                 runtime.font_ready.load() ? "ok" : "font_invalid"));
+                                                 font_code));
     }
     return nullptr;
 }

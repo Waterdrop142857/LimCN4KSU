@@ -26,6 +26,9 @@ struct RuntimeState {
     // Verified on the monitor thread before hooks are installed.
     std::atomic<bool> font_digest_verified{false};
     std::atomic<bool> font_ready{false};
+    // A verified font that the live TMP component refused to accept. Kept
+    // separate from a missing/corrupt font so diagnostics name the real stage.
+    std::atomic<bool> font_component_rejected{false};
     // Gate for replacements: false until the font is proven and hooks verified.
     std::atomic<bool> enabled{false};
     // Unity font and TMP APIs may only be called on the process main thread;
@@ -42,6 +45,11 @@ RuntimeState &state();
 
 // Persists the receipt through the companion. `code` is a protocol code text.
 void write_receipt(const char *hook_state, const char *font_state, const char *code);
+
+// True once the localization entry hooks (LoadLocalizeFileSync and
+// TextAsset.get_text) own a trampoline. Optional hooks may fail individually;
+// that is only logged, never reported through this predicate.
+bool text_entry_installed();
 
 // Starts the detached receipt updater (5 s cadence, stops with the process).
 void start_receipt_updater();
